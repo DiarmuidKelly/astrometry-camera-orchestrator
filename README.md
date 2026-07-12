@@ -4,7 +4,7 @@ Early-stage Python tool for plate-solving astrophotography frames using a docker
 
 ## What it does
 
-- Batch plate-solves a folder of images (JPEG, CR2, TIFF)
+- Batch plate-solves a folder of JPEG images (CR2/TIFF/RAW untested)
 - Writes per-image `_solved.json` sidecars with EXIF, astrometric solution, and observer metadata
 - Optionally produces NGC-annotated overlay images
 - Uses scale hints derived from EXIF focal length + sensor geometry to speed up solving
@@ -42,11 +42,23 @@ options:
   --mode {fast,accurate}
                         Override solver mode from config
   --cpulimit CPULIMIT   Override solver CPU time limit in seconds
+  --reprocess           Re-solve images that already have a sidecar JSON
 ```
 
 ## Config
 
-`config.yaml` holds static settings — solver image, index dir, optics (focal length, sensor width), observer location, and search region hints. The image folder is always passed as a CLI argument.
+`config.yaml` holds static settings — solver image, index dir, optics (focal length, sensor width), observer location, search region hints, and logging defaults. The image folder is always passed as a CLI argument.
+
+### Environment variable overrides
+
+| Variable | Values | Description |
+|---|---|---|
+| `LOG_LEVEL` | `DEBUG` `INFO` `WARNING` `ERROR` | Override log verbosity |
+| `LOG_FORMAT` | `text` `json` | Override log format (json = one JSON object per line) |
+
+```bash
+LOG_LEVEL=DEBUG LOG_FORMAT=json make batch FOLDER=/path/to/images
+```
 
 ## Development
 
