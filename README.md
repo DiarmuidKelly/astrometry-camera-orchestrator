@@ -19,7 +19,7 @@ Early-stage Python tool for plate-solving astrophotography frames using a docker
 
 ```bash
 make install-dev
-cp config.yaml.example config.yaml   # edit paths and optics
+cp config.example.yaml config.yaml   # edit paths and optics
 ```
 
 ## Usage
@@ -49,4 +49,4 @@ Early development. Batch solving works. Camera tethering (Canon 5D Mark II via g
 
 ## License
 
-MIT
+GPL v3 — see [LICENSE](LICENSE).
