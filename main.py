@@ -12,10 +12,13 @@ import sys
 from pathlib import Path
 
 from camera_orchestrator.config import Config
+from camera_orchestrator.logger import get_logger
 from camera_orchestrator.solve import solve_file
 from camera_orchestrator.solvers import build_solver
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".cr2", ".cr3", ".tif", ".tiff", ".fits", ".png"}
+
+log = get_logger("camera_orchestrator.batch")
 
 
 def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
@@ -28,23 +31,40 @@ def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
     )
 
     if not images:
-        print(f"No images found in {folder}")
+        log.error("No images found", extra={"folder": str(folder)})
         sys.exit(1)
 
-    print(f"Found {len(images)} image(s) — solver: {cfg.solver.image} [{cfg.solver.mode}]")
+    sidecar_dir = folder / "annotated" if args.annotate else folder
+
+    if not args.reprocess:
+        pending = [p for p in images if not (sidecar_dir / f"{p.stem}_solved.json").exists()]
+        skipped = len(images) - len(pending)
+        if skipped:
+            log.info("Skipping already-solved images — pass --reprocess to re-solve all",
+                     extra={"skipped": skipped})
+        images = pending
+
+    if not images:
+        log.info("All images already solved")
+        sys.exit(0)
+
+    log.info("Starting batch solve",
+             extra={"images": len(images), "solver": cfg.solver.image, "mode": cfg.solver.mode})
+
     if cfg.search.ra_deg is not None:
-        print(f"Search hint: RA={cfg.search.ra_deg:.4f} Dec={cfg.search.dec_deg:.4f} "
-              f"radius={cfg.search.radius_deg}°")
+        log.info("Search hint",
+                 extra={"ra": cfg.search.ra_deg, "dec": cfg.search.dec_deg,
+                        "radius_deg": cfg.search.radius_deg})
 
     annotate_dir = folder / "annotated" if args.annotate else None
     if annotate_dir:
         annotate_dir.mkdir(exist_ok=True)
-        print(f"Annotated output → {annotate_dir}/")
+        log.info("Annotated output", extra={"dir": str(annotate_dir)})
 
     summary = []
 
     for i, path in enumerate(images, 1):
-        print(f"[{i}/{len(images)}] {path.name} ... ", end="", flush=True)
+        log.info("Solving", extra={"image": path.name, "index": i, "total": len(images)})
 
         out_ext = ".png" if path.suffix.lower() in {".cr2", ".cr3", ".tif", ".tiff", ".fits"} else ".jpg"
         annotate_out = str(annotate_dir / f"{path.stem}_solved{out_ext}") if annotate_dir else None
@@ -52,23 +72,29 @@ def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
         job = solve_file(str(path), solver, cfg, annotate_out=annotate_out)
         record = job.to_record(cfg)
 
-        sidecar_dir = annotate_dir if annotate_dir else folder
         sidecar_path = sidecar_dir / f"{path.stem}_solved.json"
         sidecar_path.write_text(record.model_dump_json(indent=2))
-
         summary.append(record.model_dump())
 
         if job.solved and record.solve is not None:
-            print(f"RA={record.solve.center_ra_deg:.4f}° "
-                  f"Dec={record.solve.center_dec_deg:.4f}° "
-                  f"scale={record.solve.scale_arcsec_per_px:.2f}\"/px")
+            log.info("Solved", extra={
+                "image": path.name,
+                "ra": round(record.solve.center_ra_deg, 4),
+                "dec": round(record.solve.center_dec_deg, 4),
+                "scale": round(record.solve.scale_arcsec_per_px, 2),
+            })
         else:
-            print(f"no solution — {record.error or 'solver returned None'}")
+            log.warning("No solution", extra={
+                "image": path.name,
+                "error": record.error or "solver returned None",
+            })
 
     (folder / "solve_results.json").write_text(json.dumps(summary, indent=2))
 
     solved = sum(1 for r in summary if r["solved"])
-    print(f"\n{solved}/{len(summary)} solved → {folder}/solve_results.json")
+    log.info("Batch complete",
+             extra={"solved": solved, "total": len(summary),
+                    "results": str(folder / "solve_results.json")})
 
 
 def main() -> None:
@@ -86,6 +112,8 @@ def main() -> None:
                        help="Override solver mode from config")
     batch.add_argument("--cpulimit", type=int, default=None,
                        help="Override solver CPU time limit in seconds")
+    batch.add_argument("--reprocess", action="store_true",
+                       help="Re-solve images that already have a sidecar JSON")
 
     args = parser.parse_args()
     cfg = Config.load(args.config)
