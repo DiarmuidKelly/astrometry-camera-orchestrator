@@ -44,7 +44,7 @@ def list_files() -> list[tuple[int, str]]:
     return files
 
 
-def grab_latest(out_dir: Path) -> None:
+def grab_latest(out_dir: Path, force: bool = False) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("Releasing gvfs mount ...")
@@ -57,18 +57,27 @@ def grab_latest(out_dir: Path) -> None:
         sys.exit(0)
 
     num, name = files[-1]
+    dest = out_dir / name
     print(f"Latest file: #{num} {name}")
 
-    result = run(["gphoto2", "--get-file", str(num), "--filename", str(out_dir / name)])
+    if dest.exists() and not force:
+        print(f"Already exists: {dest}  (pass --force to overwrite)")
+        sys.exit(0)
+
+    cmd = ["gphoto2", "--get-file", str(num), "--filename", str(dest)]
+    if force:
+        cmd.append("--force-overwrite")
+    result = run(cmd)
     if result.returncode != 0:
         print(f"Download failed: {result.stderr.strip()}")
         sys.exit(1)
 
-    print(f"Saved → {out_dir / name}")
+    print(f"Saved → {dest}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="grab")
     parser.add_argument("--out", default="./incoming", help="Output directory for downloaded images")
+    parser.add_argument("--force", action="store_true", help="Overwrite if file already exists")
     args = parser.parse_args()
-    grab_latest(Path(args.out))
+    grab_latest(Path(args.out), force=args.force)
