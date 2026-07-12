@@ -14,23 +14,23 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 class ImageExif(BaseModel):
     """EXIF metadata extracted from the original image file."""
 
-    focal_mm: Optional[float] = Field(None, description="Lens focal length in millimetres as reported by the camera.")
-    focal_mm_equiv: Optional[float] = Field(None, description="35mm-equivalent focal length, computed from focal_mm × crop factor. Null for full-frame sensors.")
-    sensor_width_mm: Optional[float] = Field(None, description="Physical sensor width in millimetres, taken from config (not EXIF).")
-    iso: Optional[int] = Field(None, description="ISO sensitivity setting used for the exposure.")
-    shutter_sec: Optional[float] = Field(None, description="Shutter speed in seconds (e.g. 0.5 = 1/2 s).")
-    aperture: Optional[float] = Field(None, description="Aperture f-number (e.g. 5.6 = f/5.6).")
-    datetime: Optional[str] = Field(None, description="Camera capture time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS). Local time, no timezone — EXIF does not carry one.")
+    focal_mm: Optional[float] = Field(default=None, description="Lens focal length in millimetres as reported by the camera.")
+    focal_mm_equiv: Optional[float] = Field(default=None, description="35mm-equivalent focal length, computed from focal_mm × crop factor. Null for full-frame sensors.")
+    sensor_width_mm: Optional[float] = Field(default=None, description="Physical sensor width in millimetres, taken from config (not EXIF).")
+    iso: Optional[int] = Field(default=None, description="ISO sensitivity setting used for the exposure.")
+    shutter_sec: Optional[float] = Field(default=None, description="Shutter speed in seconds (e.g. 0.5 = 1/2 s).")
+    aperture: Optional[float] = Field(default=None, description="Aperture f-number (e.g. 5.6 = f/5.6).")
+    datetime: Optional[str] = Field(default=None, description="Camera capture time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS). Local time, no timezone — EXIF does not carry one.")
 
 
 class SolveHints(BaseModel):
     """Optional hints passed to the plate solver to narrow the search space."""
 
-    scale_low: Optional[float] = Field(None, description="Lower bound of the image scale in arcseconds per pixel.")
-    scale_high: Optional[float] = Field(None, description="Upper bound of the image scale in arcseconds per pixel.")
-    ra_deg: Optional[float] = Field(None, description="Right ascension of the expected field centre in decimal degrees.")
-    dec_deg: Optional[float] = Field(None, description="Declination of the expected field centre in decimal degrees.")
-    radius_deg: Optional[float] = Field(None, description="Search radius around the RA/Dec hint in degrees. Wider = slower.")
+    scale_low: Optional[float] = Field(default=None, description="Lower bound of the image scale in arcseconds per pixel.")
+    scale_high: Optional[float] = Field(default=None, description="Upper bound of the image scale in arcseconds per pixel.")
+    ra_deg: Optional[float] = Field(default=None, description="Right ascension of the expected field centre in decimal degrees.")
+    dec_deg: Optional[float] = Field(default=None, description="Declination of the expected field centre in decimal degrees.")
+    radius_deg: Optional[float] = Field(default=None, description="Search radius around the RA/Dec hint in degrees. Wider = slower.")
 
 
 class SolveResult(BaseModel):
@@ -41,14 +41,14 @@ class SolveResult(BaseModel):
     scale_arcsec_per_px: float = Field(description="Image scale in arcseconds per pixel derived from the WCS solution.")
     width_px: int = Field(description="Image width in pixels.")
     height_px: int = Field(description="Image height in pixels.")
-    annotated_path: Optional[str] = Field(None, description="Filename of the NGC-annotated overlay image, if produced.")
+    annotated_path: Optional[str] = Field(default=None, description="Filename of the NGC-annotated overlay image, if produced.")
 
 
 class ObserverInfo(BaseModel):
     """Geographic location of the observer at capture time."""
 
-    lat: Optional[float] = Field(None, description="Observer latitude in decimal degrees (positive = north).")
-    lon: Optional[float] = Field(None, description="Observer longitude in decimal degrees (positive = east).")
+    lat: Optional[float] = Field(default=None, description="Observer latitude in decimal degrees (positive = north).")
+    lon: Optional[float] = Field(default=None, description="Observer longitude in decimal degrees (positive = east).")
 
 
 class SolveRecord(BaseModel):
@@ -63,11 +63,11 @@ class SolveRecord(BaseModel):
     solved_at: str = Field(description="UTC timestamp when the solve completed, in ISO 8601 format with timezone offset.")
     exif: ImageExif = Field(description="EXIF metadata extracted from the source image.")
     solved: bool = Field(description="True if a plate solution was found.")
-    solve: Optional[SolveResult] = Field(None, description="Astrometric solution. Null if the solve failed.")
+    solve: Optional[SolveResult] = Field(default=None, description="Astrometric solution. Null if the solve failed.")
     hints_used: SolveHints = Field(description="Scale and position hints that were passed to the solver.")
     observer: ObserverInfo = Field(description="Geographic location of the observer.")
     solver_mode: Literal["fast", "accurate"] = Field(description="Solver mode used: fast (downsampled, fewer objects) or accurate (full resolution).")
-    error: Optional[str] = Field(None, description="Error message if the solve failed. Null on success.")
+    error: Optional[str] = Field(default=None, description="Error message if the solve failed. Null on success.")
 
 
 class SolveJob(BaseModel):
@@ -78,11 +78,11 @@ class SolveJob(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    path: Optional[str] = Field(None, description="Absolute path to the source image file.")
-    exif: Optional[ImageExif] = Field(None, description="EXIF metadata, or None if extraction failed.")
-    hints: SolveHints = Field(default_factory=SolveHints, description="Hints passed to the solver for this image.")
-    result: Optional[SolveResult] = Field(None, description="Solver output. None until solve completes or if it failed.")
-    error: Optional[str] = Field(None, description="Error message if any stage failed.")
+    path: Optional[str] = Field(default=None, description="Absolute path to the source image file.")
+    exif: Optional[ImageExif] = Field(default=None, description="EXIF metadata, or None if extraction failed.")
+    hints: SolveHints = Field(default_factory=lambda: SolveHints(), description="Hints passed to the solver for this image.")
+    result: Optional[SolveResult] = Field(default=None, description="Solver output. None until solve completes or if it failed.")
+    error: Optional[str] = Field(default=None, description="Error message if any stage failed.")
 
     @computed_field  # type: ignore[prop-decorator]
     @property

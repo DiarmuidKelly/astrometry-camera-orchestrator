@@ -90,14 +90,13 @@ def result_from_wcs(
     )
 
 
-def build_hints(cfg: "Config", exif_focal_mm: float | None, frame_width_px: int) -> SolveHints:
+def build_hints(cfg, exif_focal_mm: float | None, frame_width_px: int) -> SolveHints:
     """Assemble SolveHints from config + per-image focal length.
 
     EXIF focal length takes priority over the config fallback so a mixed batch
     (70mm + 200mm in the same folder) gets the correct scale hint per frame.
     Position hints (RA/Dec/radius) always come from config.
     """
-    from ..config import Config  # local import avoids circular dependency
     focal_mm = exif_focal_mm or cfg.optics.focal_mm
     sensor_w = cfg.optics.sensor_width_mm
 
