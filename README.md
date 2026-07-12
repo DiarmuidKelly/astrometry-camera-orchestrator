@@ -1,6 +1,6 @@
 # astrometry-camera-orchestrator
 
-Early-stage Python tool for plate-solving astrophotography frames using a dockerised [astrometry.net](https://astrometry.net) solver. Designed to grow into a full capture-and-solve pipeline for Canon DSLRs.
+Early-stage Python tool for plate-solving astrophotography frames using a dockerised [astrometry.net](https://astrometry.net) solver. Designed to grow into a full capture-and-solve pipeline with camera tethering via gphoto2.
 
 ## What it does
 
@@ -45,7 +45,7 @@ make fmt                   # ruff format
 
 ## Status
 
-Early development. Batch solving works. Camera tethering (Canon 5D Mark II via gphoto2) is not yet implemented.
+Early development. Batch solving works. Camera tethering (via gphoto2) is not yet implemented.
 
 ## License
 
