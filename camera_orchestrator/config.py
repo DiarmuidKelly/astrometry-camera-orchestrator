@@ -42,12 +42,20 @@ class LoggingConfig(BaseModel):
     format: Literal["text", "json"] = "text"
 
 
+class GrabConfig(BaseModel):
+    """Configuration for the grab subcommand."""
+
+    out_dir: str = Field(default="./incoming", description="Directory to save downloaded images into.")
+    poll_interval: Optional[float] = Field(default=None, description="Poll the camera every N seconds for new files. Null disables polling (one-shot mode).")
+
+
 class Config(BaseModel):
     solver: SolverConfig = Field(default_factory=SolverConfig)
     optics: OpticsConfig = Field(default_factory=OpticsConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     location: LocationConfig = Field(default_factory=LocationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    grab: GrabConfig = Field(default_factory=GrabConfig)
 
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Config":

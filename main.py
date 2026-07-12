@@ -3,6 +3,8 @@
 
 Usage:
     python main.py batch <folder> [--config config.yaml] [--annotate] [--mode fast|accurate]
+    python main.py grab [--out ./incoming] [--force]
+    python main.py poll --interval 5 [--out ./incoming] [--force]
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import sys
 from pathlib import Path
 
 from camera_orchestrator.config import Config
+from camera_orchestrator.grab import grab_latest, poll
 from camera_orchestrator.log import get_logger
 from camera_orchestrator.solve import solve_file
 from camera_orchestrator.solvers import build_solver
@@ -115,12 +118,28 @@ def main() -> None:
     batch.add_argument("--reprocess", action="store_true",
                        help="Re-solve images that already have a sidecar JSON")
 
+    grab_p = sub.add_parser("grab", help="Download images from the connected camera")
+    grab_p.add_argument("--out", default=None, help="Output directory (default: grab.out_dir from config)")
+    grab_p.add_argument("--force", action="store_true", help="Overwrite if file already exists")
+    grab_p.add_argument("--poll", metavar="SECONDS", type=float, default=None,
+                        help="Poll camera every N seconds (default: grab.poll_interval from config)")
+
     args = parser.parse_args()
+
     cfg = Config.load(args.config)
 
     global log
     log = get_logger("camera_orchestrator.batch",
                      fmt=cfg.logging.format, level=cfg.logging.level)
+
+    if args.command == "grab":
+        out_dir = Path(args.out) if args.out else Path(cfg.grab.out_dir)
+        interval = args.poll if args.poll is not None else cfg.grab.poll_interval
+        if interval is not None:
+            poll(out_dir, interval=interval, force=args.force)
+        else:
+            grab_latest(out_dir, force=args.force)
+        return
 
     if args.command == "batch":
         if args.mode:

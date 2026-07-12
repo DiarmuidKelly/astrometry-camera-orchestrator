@@ -6,11 +6,16 @@ PIP := $(VENV)/bin/pip
 help:
 	@echo "camera-orchestrator"
 	@echo ""
-	@echo "  make venv                    create the virtualenv"
-	@echo "  make install                 install runtime deps"
-	@echo "  make batch FOLDER=<path> [CONFIG=config.yaml]      plate-solve all images in a folder"
+	@echo "  make batch FOLDER=<path> [CONFIG=config.yaml]       plate-solve all images in a folder"
 	@echo "  make batch-fast FOLDER=<path> [CONFIG=config.yaml]  fast solve (lower accuracy)"
+	@echo "  make grab [CONFIG=config.yaml] [OUT=<path>]         download latest image from camera"
+	@echo "  make grab POLL=5 [CONFIG=config.yaml] [OUT=<path>]  poll camera every N seconds"
+	@echo ""
+	@echo "  make install                 install runtime deps"
+	@echo "  make install-dev             install runtime + dev deps"
 	@echo "  make test                    run unit tests"
+	@echo "  make lint                    ruff + mypy"
+	@echo "  make fmt                     ruff format"
 	@echo "  make clean                   remove venv and build artefacts"
 
 $(VENV):
@@ -47,6 +52,13 @@ batch:
 .PHONY: batch-fast
 batch-fast:
 	$(PY) main.py batch $(FOLDER) --config $(CONFIG) --annotate --mode fast
+
+OUT ?=
+POLL ?=
+
+.PHONY: grab
+grab:
+	$(PY) main.py grab --config $(CONFIG) $(if $(OUT),--out $(OUT)) $(if $(POLL),--poll $(POLL))
 
 .PHONY: test
 test:

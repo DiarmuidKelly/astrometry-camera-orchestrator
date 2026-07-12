@@ -24,3 +24,7 @@ location:
 logging:
   level: INFO    # DEBUG, INFO, WARNING, ERROR — overridden by LOG_LEVEL env var
   format: text   # text or json — overridden by LOG_FORMAT env var
+
+grab:
+  out_dir: ./incoming        # directory to save downloaded images into
+  poll_interval: null        # poll every N seconds; null = one-shot mode
