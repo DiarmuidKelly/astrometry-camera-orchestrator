@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from camera_orchestrator.config import Config
-from camera_orchestrator.logger import get_logger
+from camera_orchestrator.log import get_logger
 from camera_orchestrator.solve import solve_file
 from camera_orchestrator.solvers import build_solver
 

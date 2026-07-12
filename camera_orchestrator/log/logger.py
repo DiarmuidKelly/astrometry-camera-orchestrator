@@ -7,7 +7,7 @@ Provides a thin wrapper around Python's standard logging with:
 - File handler ready to wire up — call add_file_handler(path) to enable
 
 Usage:
-    from camera_orchestrator.logger import get_logger
+    from camera_orchestrator.log import get_logger
     log = get_logger(__name__)
     log.info("solving image", extra={"image": "IMG_4341.JPG", "index": 1, "total": 113})
 """
@@ -17,12 +17,9 @@ import json
 import logging
 import os
 import sys
-import warnings
 from typing import Any
 
-# Suppress noisy astropy WCS warnings that appear on every solve
-warnings.filterwarnings("ignore", message=".*FITSFixedWarning.*")
-warnings.filterwarnings("ignore", message=".*WCS transformation has more axes.*")
+from . import suppressed  # noqa: F401 — apply suppressions on import
 
 # Fields that are part of every LogRecord — never treat these as user extras
 _LOGRECORD_FIELDS = frozenset({
@@ -87,8 +84,8 @@ def get_logger(
     """Return a named logger configured for camera-orchestrator.
 
     Resolution order for each setting (first wins):
-      format: LOG_FORMAT env var → fmt argument → config.yaml logging.format → "text"
-      level:  LOG_LEVEL env var  → level argument → config.yaml logging.level → "INFO"
+      format: LOG_FORMAT env var → fmt argument → "text"
+      level:  LOG_LEVEL env var  → level argument → "INFO"
 
     Args:
         name: Logger name — pass __name__ from the calling module.
