@@ -106,7 +106,7 @@ make test-integration
 
 ## Status
 
-Batch solving works and has been tested against JPEG and CR3 files. Camera grab (one-shot and polled) works with Canon M50 II in mass storage mode via gphoto2.
+Batch solving works and has been tested against JPEG files. Camera grab (one-shot and polled) works with Canon M50 II in mass storage mode via gphoto2.
 
 ## License
 
