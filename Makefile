@@ -47,18 +47,18 @@ CONFIG ?= config.yaml
 
 .PHONY: batch
 batch:
-	$(PY) main.py batch $(FOLDER) --config $(CONFIG) --annotate
+	$(PY) main.py --config $(CONFIG) batch $(FOLDER) --annotate
 
 .PHONY: batch-fast
 batch-fast:
-	$(PY) main.py batch $(FOLDER) --config $(CONFIG) --annotate --mode fast
+	$(PY) main.py --config $(CONFIG) batch $(FOLDER) --annotate --mode fast
 
 OUT ?=
 POLL ?=
 
 .PHONY: grab
 grab:
-	$(PY) main.py grab --config $(CONFIG) $(if $(OUT),--out $(OUT)) $(if $(POLL),--poll $(POLL))
+	$(PY) main.py --config $(CONFIG) grab $(if $(OUT),--out $(OUT)) $(if $(POLL),--poll $(POLL))
 
 .PHONY: test
 test:

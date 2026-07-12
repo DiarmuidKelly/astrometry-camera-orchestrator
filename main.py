@@ -108,7 +108,6 @@ def main() -> None:
 
     batch = sub.add_parser("batch", help="Plate-solve all images in a folder")
     batch.add_argument("folder", help="Folder containing images")
-    batch.add_argument("--config", default="config.yaml", help="Config YAML path")
     batch.add_argument("--annotate", action="store_true",
                        help="Save annotated overlay to <folder>/annotated/")
     batch.add_argument("--mode", choices=["fast", "accurate"], default=None,
