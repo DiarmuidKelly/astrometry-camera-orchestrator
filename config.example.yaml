@@ -20,3 +20,7 @@ search:
 location:
   lat: null   # Observer latitude in decimal degrees (positive = north)
   lon: null   # Observer longitude in decimal degrees (positive = east)
+
+logging:
+  level: INFO    # DEBUG, INFO, WARNING, ERROR — overridden by LOG_LEVEL env var
+  format: text   # text or json — overridden by LOG_FORMAT env var

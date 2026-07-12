@@ -18,7 +18,7 @@ from camera_orchestrator.solvers import build_solver
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".cr2", ".cr3", ".tif", ".tiff", ".fits", ".png"}
 
-log = get_logger("camera_orchestrator.batch")
+log = get_logger("camera_orchestrator.batch")  # reconfigured after config load in main()
 
 
 def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
@@ -117,6 +117,10 @@ def main() -> None:
 
     args = parser.parse_args()
     cfg = Config.load(args.config)
+
+    global log
+    log = get_logger("camera_orchestrator.batch",
+                     fmt=cfg.logging.format, level=cfg.logging.level)
 
     if args.command == "batch":
         if args.mode:

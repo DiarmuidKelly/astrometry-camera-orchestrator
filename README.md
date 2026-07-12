@@ -47,7 +47,18 @@ options:
 
 ## Config
 
-`config.yaml` holds static settings — solver image, index dir, optics (focal length, sensor width), observer location, and search region hints. The image folder is always passed as a CLI argument.
+`config.yaml` holds static settings — solver image, index dir, optics (focal length, sensor width), observer location, search region hints, and logging defaults. The image folder is always passed as a CLI argument.
+
+### Environment variable overrides
+
+| Variable | Values | Description |
+|---|---|---|
+| `LOG_LEVEL` | `DEBUG` `INFO` `WARNING` `ERROR` | Override log verbosity |
+| `LOG_FORMAT` | `text` `json` | Override log format (json = one JSON object per line) |
+
+```bash
+LOG_LEVEL=DEBUG LOG_FORMAT=json make batch FOLDER=/path/to/images
+```
 
 ## Development
 

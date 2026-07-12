@@ -37,11 +37,17 @@ class LocationConfig(BaseModel):
     lon: Optional[float] = None
 
 
+class LoggingConfig(BaseModel):
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    format: Literal["text", "json"] = "text"
+
+
 class Config(BaseModel):
     solver: SolverConfig = Field(default_factory=SolverConfig)
     optics: OpticsConfig = Field(default_factory=OpticsConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     location: LocationConfig = Field(default_factory=LocationConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Config":

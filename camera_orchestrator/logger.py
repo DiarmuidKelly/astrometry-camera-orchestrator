@@ -79,13 +79,21 @@ class _TextFormatter(logging.Formatter):
         return base
 
 
-def get_logger(name: str, fmt: str | None = None) -> logging.Logger:
+def get_logger(
+    name: str,
+    fmt: str | None = None,
+    level: str | None = None,
+) -> logging.Logger:
     """Return a named logger configured for camera-orchestrator.
+
+    Resolution order for each setting (first wins):
+      format: LOG_FORMAT env var → fmt argument → config.yaml logging.format → "text"
+      level:  LOG_LEVEL env var  → level argument → config.yaml logging.level → "INFO"
 
     Args:
         name: Logger name — pass __name__ from the calling module.
-        fmt: "json" for JSON lines, "text" for human-readable (default).
-             Overridden by the LOG_FORMAT environment variable.
+        fmt: "json" or "text". Overridden by LOG_FORMAT env var.
+        level: "DEBUG", "INFO", "WARNING", "ERROR". Overridden by LOG_LEVEL env var.
 
     Returns:
         A standard logging.Logger instance.
@@ -95,12 +103,14 @@ def get_logger(name: str, fmt: str | None = None) -> logging.Logger:
         return logger
 
     fmt = os.environ.get("LOG_FORMAT", fmt or "text")
+    level = os.environ.get("LOG_LEVEL", level or "INFO").upper()
+
     formatter: logging.Formatter = _JsonFormatter() if fmt == "json" else _TextFormatter()
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(getattr(logging, level, logging.INFO))
     logger.propagate = False
     return logger
 
