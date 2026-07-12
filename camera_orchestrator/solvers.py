@@ -124,8 +124,7 @@ class DockerSolver(Solver):
                 "--dir", "/data",
                 "--overwrite",
                 "--cpulimit", str(self.cpulimit),
-                "--downsample", str(hints.downsample),
-            ]
+            ] + self.extra_args
             if annotate_out is None:
                 cmd.append("--no-plots")
 
@@ -139,7 +138,6 @@ class DockerSolver(Solver):
                 cmd += ["--ra", f"{hints.ra_deg:.6f}", "--dec", f"{hints.dec_deg:.6f}"]
                 if hints.radius_deg is not None:
                     cmd += ["--radius", f"{hints.radius_deg:.4f}"]
-            cmd += self.extra_args
 
             proc = subprocess.run(cmd, capture_output=True, text=True)
             wcs_path = os.path.join(work, f"{stem}.wcs")
@@ -201,4 +199,5 @@ def build_solver(cfg) -> Solver:
         image=cfg.solver.image,
         index_dir=cfg.solver.index_dir,
         cpulimit=cfg.solver.cpulimit,
+        extra_args=cfg.solver.solve_args,
     )

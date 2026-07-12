@@ -17,6 +17,15 @@ class SolverCfg:
     image: str = "diarmuidk/astrometry-dockerised-solver:latest"
     index_dir: str = ""
     cpulimit: int = 60
+    mode: str = "accurate"  # "fast" or "accurate"
+
+    @property
+    def solve_args(self) -> list[str]:
+        if self.mode == "fast":
+            # Coarser downsample + fewer objects. No --depth limit — with a
+            # 60° search radius, depth 10 is too shallow and kills solutions.
+            return ["--downsample", "4", "--objs", "100"]
+        return ["--downsample", "2"]
 
 
 @dataclass

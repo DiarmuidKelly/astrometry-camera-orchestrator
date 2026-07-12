@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import cv2
-import numpy as np
 
 from .config import Config
 from .exif import ImageExif, read_exif
@@ -81,18 +80,3 @@ def solve_file(path: str, solver: Solver, cfg: Config,
         return SolveJob(path=path, exif=exif, hints=hints, result=None, error=str(exc))
 
 
-def solve_frame(frame: np.ndarray, solver: Solver, cfg: Config,
-                exif: ImageExif | None = None) -> SolveJob:
-    """Plate-solve a live numpy frame (e.g. from EDSDK or HDMI capture).
-
-    exif can be passed in separately when the grab layer has already read it
-    (e.g. from the 5D Mark II session properties).
-    """
-    h, w = frame.shape[:2]
-    hints = build_hints(cfg, exif, w)
-
-    try:
-        result = solver.solve(frame, hints)
-        return SolveJob(path=None, exif=exif, hints=hints, result=result)
-    except Exception as exc:
-        return SolveJob(path=None, exif=exif, hints=hints, result=None, error=str(exc))
