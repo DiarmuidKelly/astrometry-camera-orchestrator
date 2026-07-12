@@ -1,0 +1,22 @@
+solver:
+  image: diarmuidk/astrometry-dockerised-solver:latest
+  index_dir: /path/to/astrometry-index-files
+  cpulimit: 60
+  mode: accurate  # "fast" (~5-8s/image) or "accurate" (~28s/image)
+
+optics:
+  # focal_mm is intentionally null here — EXIF from each file takes priority.
+  # Set this only if your images have no focal length in EXIF.
+  focal_mm: null
+  sensor_width_mm: 22.3  # APS-C example; full-frame = 35.8
+
+search:
+  # Centre of the region you're imaging — narrows the solver search space.
+  # RA/Dec in decimal degrees. Remove or set to null to search the full sky (slower).
+  ra_deg: null
+  dec_deg: null
+  radius_deg: 60.0
+
+location:
+  lat: null   # Observer latitude in decimal degrees (positive = north)
+  lon: null   # Observer longitude in decimal degrees (positive = east)
