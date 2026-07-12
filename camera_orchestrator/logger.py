@@ -17,7 +17,20 @@ import json
 import logging
 import os
 import sys
+import warnings
 from typing import Any
+
+# Suppress noisy astropy WCS warnings that appear on every solve
+warnings.filterwarnings("ignore", message=".*FITSFixedWarning.*")
+warnings.filterwarnings("ignore", message=".*WCS transformation has more axes.*")
+
+# Fields that are part of every LogRecord — never treat these as user extras
+_LOGRECORD_FIELDS = frozenset({
+    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+    "created", "msecs", "relativeCreated", "thread", "threadName",
+    "processName", "process", "taskName", "message", "asctime",
+})
 
 
 class _JsonFormatter(logging.Formatter):
@@ -30,9 +43,8 @@ class _JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        # Attach any structured fields passed via extra={}
         for key, val in record.__dict__.items():
-            if key not in logging.LogRecord.__dict__ and not key.startswith("_"):
+            if key not in _LOGRECORD_FIELDS and not key.startswith("_"):
                 payload[key] = val
         if record.exc_info:
             payload["error"] = self.formatException(record.exc_info)
@@ -40,7 +52,7 @@ class _JsonFormatter(logging.Formatter):
 
 
 class _TextFormatter(logging.Formatter):
-    """Human-readable: timestamp  LEVEL  logger  message  key=value ..."""
+    """Human-readable: timestamp  LEVEL  message  key=value ..."""
 
     _LEVEL_COLOURS = {
         "DEBUG":    "\033[37m",
@@ -54,15 +66,14 @@ class _TextFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ts = self.formatTime(record, "%H:%M:%S")
         colour = self._LEVEL_COLOURS.get(record.levelname, "")
-        level = f"{colour}{record.levelname:<8}{self._RESET}" if sys.stderr.isatty() else f"{record.levelname:<8}"
-        base = f"{ts}  {level}  {record.name}  {record.getMessage()}"
+        level = f"{colour}{record.levelname:<8}{self._RESET}" if sys.stdout.isatty() else f"{record.levelname:<8}"
+        base = f"{ts}  {level}  {record.getMessage()}"
         extras = {
             k: v for k, v in record.__dict__.items()
-            if k not in logging.LogRecord.__dict__ and not k.startswith("_")
+            if k not in _LOGRECORD_FIELDS and not k.startswith("_")
         }
         if extras:
-            kv = "  ".join(f"{k}={v}" for k, v in extras.items())
-            base = f"{base}  {kv}"
+            base += "  " + "  ".join(f"{k}={v}" for k, v in extras.items())
         if record.exc_info:
             base += "\n" + self.formatException(record.exc_info)
         return base
@@ -81,7 +92,7 @@ def get_logger(name: str, fmt: str | None = None) -> logging.Logger:
     """
     logger = logging.getLogger(name)
     if logger.handlers:
-        return logger  # already configured
+        return logger
 
     fmt = os.environ.get("LOG_FORMAT", fmt or "text")
     formatter: logging.Formatter = _JsonFormatter() if fmt == "json" else _TextFormatter()
