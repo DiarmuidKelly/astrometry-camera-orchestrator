@@ -9,10 +9,12 @@ from pydantic import BaseModel, Field
 
 
 class SolverConfig(BaseModel):
-    image: str = "diarmuidk/astrometry-dockerised-solver:latest"
-    index_dir: str = ""
-    cpulimit: int = 60
-    mode: Literal["fast", "accurate"] = "accurate"
+    """Configuration for the astrometry.net Docker solver."""
+
+    image: str = Field(default="diarmuidk/astrometry-dockerised-solver:latest", description="Docker image to use for plate solving.")
+    index_dir: str = Field(default="", description="Path to the directory containing astrometry index files.")
+    cpulimit: int = Field(default=60, description="CPU time limit in seconds per solve attempt.")
+    mode: Literal["fast", "accurate"] = Field(default="accurate", description="Solver mode: 'fast' downsamples more aggressively; 'accurate' is slower but more reliable.")
 
     @property
     def solve_args(self) -> list[str]:
@@ -22,24 +24,39 @@ class SolverConfig(BaseModel):
 
 
 class OpticsConfig(BaseModel):
-    focal_mm: Optional[float] = None
-    sensor_width_mm: Optional[float] = None
+    """Optics configuration used to compute plate scale hints."""
+
+    focal_mm: Optional[float] = Field(default=None, description="Focal length in mm. If set, overridden by EXIF focal length when present.")
+    sensor_width_mm: Optional[float] = Field(default=None, description="Sensor width in mm (e.g. 22.3 for APS-C, 35.8 for full-frame).")
 
 
 class SearchConfig(BaseModel):
-    ra_deg: Optional[float] = None
-    dec_deg: Optional[float] = None
-    radius_deg: float = 60.0
+    """Sky search region hint to narrow the solver's search space."""
+
+    ra_deg: Optional[float] = Field(default=None, description="Centre RA of the search region in decimal degrees. Null searches the full sky.")
+    dec_deg: Optional[float] = Field(default=None, description="Centre Dec of the search region in decimal degrees.")
+    radius_deg: float = Field(default=60.0, description="Search radius in degrees around the RA/Dec hint.")
 
 
 class LocationConfig(BaseModel):
-    lat: Optional[float] = None
-    lon: Optional[float] = None
+    """Observer location for metadata purposes."""
+
+    lat: Optional[float] = Field(default=None, description="Observer latitude in decimal degrees (positive = north).")
+    lon: Optional[float] = Field(default=None, description="Observer longitude in decimal degrees (positive = east).")
 
 
 class LoggingConfig(BaseModel):
-    level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    format: Literal["text", "json"] = "text"
+    """Logging output configuration."""
+
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(default="INFO", description="Log verbosity. Overridden by LOG_LEVEL env var.")
+    format: Literal["text", "json"] = Field(default="text", description="Log format. 'json' emits one JSON object per line. Overridden by LOG_FORMAT env var.")
+
+
+class GrabConfig(BaseModel):
+    """Configuration for the grab subcommand."""
+
+    out_dir: str = Field(default="./incoming", description="Directory to save downloaded images into.")
+    poll_interval: Optional[float] = Field(default=None, description="Poll the camera every N seconds for new files. Null disables polling (one-shot mode).")
 
 
 class Config(BaseModel):
@@ -48,6 +65,7 @@ class Config(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
     location: LocationConfig = Field(default_factory=LocationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    grab: GrabConfig = Field(default_factory=GrabConfig)
 
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Config":

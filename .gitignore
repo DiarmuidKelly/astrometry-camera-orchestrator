@@ -5,6 +5,7 @@ __pycache__/
 config.yaml
 .coverage
 htmlcov/
+incoming/
 .ruff_cache/
 .mypy_cache/
 *.jpg
