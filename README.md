@@ -4,7 +4,7 @@ Early-stage Python tool for plate-solving astrophotography frames using a docker
 
 ## What it does
 
-- Batch plate-solves a folder of images (JPEG, CR2, TIFF)
+- Batch plate-solves a folder of JPEG images (CR2/TIFF/RAW untested)
 - Writes per-image `_solved.json` sidecars with EXIF, astrometric solution, and observer metadata
 - Optionally produces NGC-annotated overlay images
 - Uses scale hints derived from EXIF focal length + sensor geometry to speed up solving
@@ -42,6 +42,7 @@ options:
   --mode {fast,accurate}
                         Override solver mode from config
   --cpulimit CPULIMIT   Override solver CPU time limit in seconds
+  --reprocess           Re-solve images that already have a sidecar JSON
 ```
 
 ## Config
