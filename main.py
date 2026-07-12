@@ -12,56 +12,20 @@ import sys
 from pathlib import Path
 
 from camera_orchestrator.config import Config
-from camera_orchestrator.pipeline import solve_file
+from camera_orchestrator.solve import solve_file
 from camera_orchestrator.solvers import build_solver
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".cr2", ".cr3", ".tif", ".tiff", ".fits", ".png"}
-
-
-def _sidecar(path: Path, job, cfg: Config) -> dict:
-    is_crop = cfg.optics.sensor_width_mm and cfg.optics.sensor_width_mm < 30
-    return {
-        "original_file": path.name,
-        "exif": {
-            "focal_mm": job.exif.focal_mm if job.exif else None,
-            "focal_mm_equiv": round(job.exif.focal_mm * 1.6, 1)
-                              if (job.exif and job.exif.focal_mm and is_crop) else None,
-            "sensor_width_mm": cfg.optics.sensor_width_mm,
-            "iso": job.exif.iso if job.exif else None,
-            "shutter_sec": job.exif.shutter_sec if job.exif else None,
-            "aperture": job.exif.aperture if job.exif else None,
-            "datetime": job.exif.datetime if job.exif else None,
-        },
-        "solved": job.solved,
-        "solve": {
-            "ra_deg": job.result.center_ra_deg,
-            "dec_deg": job.result.center_dec_deg,
-            "scale_arcsec_per_px": job.result.scale_arcsec_per_px,
-            "width_px": job.result.width,
-            "height_px": job.result.height,
-        } if job.result else None,
-        "hints_used": {
-            "scale_low": job.hints.scale_low,
-            "scale_high": job.hints.scale_high,
-            "ra_deg": job.hints.ra_deg,
-            "dec_deg": job.hints.dec_deg,
-            "radius_deg": job.hints.radius_deg,
-        },
-        "observer": {
-            "lat": cfg.location.lat,
-            "lon": cfg.location.lon,
-        },
-        "solver_mode": cfg.solver.mode,
-        "error": job.error,
-    }
 
 
 def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
     solver = build_solver(cfg)
 
     folder = Path(args.folder)
-    images = sorted(p for p in folder.iterdir()
-                    if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES)
+    images = sorted(
+        p for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
+    )
 
     if not images:
         print(f"No images found in {folder}")
@@ -82,27 +46,26 @@ def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
     for i, path in enumerate(images, 1):
         print(f"[{i}/{len(images)}] {path.name} ... ", end="", flush=True)
 
-        stem = path.stem
         out_ext = ".png" if path.suffix.lower() in {".cr2", ".cr3", ".tif", ".tiff", ".fits"} else ".jpg"
-        annotate_out = str(annotate_dir / f"{stem}_solved{out_ext}") if annotate_dir else None
+        annotate_out = str(annotate_dir / f"{path.stem}_solved{out_ext}") if annotate_dir else None
 
         job = solve_file(str(path), solver, cfg, annotate_out=annotate_out)
-        data = _sidecar(path, job, cfg)
+        record = job.to_record(cfg)
 
         sidecar_dir = annotate_dir if annotate_dir else folder
-        with open(sidecar_dir / f"{stem}_solved.json", "w") as f:
-            json.dump(data, f, indent=2)
+        sidecar_path = sidecar_dir / f"{path.stem}_solved.json"
+        sidecar_path.write_text(record.model_dump_json(indent=2))
 
-        summary.append(data)
+        summary.append(record.model_dump())
 
-        if job.solved:
-            print(f"RA={job.result.center_ra_deg:.4f}° Dec={job.result.center_dec_deg:.4f}° "
-                  f"scale={job.result.scale_arcsec_per_px:.2f}\"/px")
+        if job.solved and record.solve is not None:
+            print(f"RA={record.solve.center_ra_deg:.4f}° "
+                  f"Dec={record.solve.center_dec_deg:.4f}° "
+                  f"scale={record.solve.scale_arcsec_per_px:.2f}\"/px")
         else:
-            print(f"no solution — {job.error or 'solver returned None'}")
+            print(f"no solution — {record.error or 'solver returned None'}")
 
-    with open(folder / "solve_results.json", "w") as f:
-        json.dump(summary, f, indent=2)
+    (folder / "solve_results.json").write_text(json.dumps(summary, indent=2))
 
     solved = sum(1 for r in summary if r["solved"])
     print(f"\n{solved}/{len(summary)} solved → {folder}/solve_results.json")
@@ -116,6 +79,7 @@ def main() -> None:
 
     batch = sub.add_parser("batch", help="Plate-solve all images in a folder")
     batch.add_argument("folder", help="Folder containing images")
+    batch.add_argument("--config", default="config.yaml", help="Config YAML path")
     batch.add_argument("--annotate", action="store_true",
                        help="Save annotated overlay to <folder>/annotated/")
     batch.add_argument("--mode", choices=["fast", "accurate"], default=None,

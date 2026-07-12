@@ -8,8 +8,8 @@ help:
 	@echo ""
 	@echo "  make venv                    create the virtualenv"
 	@echo "  make install                 install runtime deps"
-	@echo "  make batch FOLDER=<path>     plate-solve all images in a folder"
-	@echo "  make batch-fast FOLDER=<path> fast solve (lower accuracy)"
+	@echo "  make batch FOLDER=<path> [CONFIG=config.yaml]      plate-solve all images in a folder"
+	@echo "  make batch-fast FOLDER=<path> [CONFIG=config.yaml]  fast solve (lower accuracy)"
 	@echo "  make test                    run unit tests"
 	@echo "  make clean                   remove venv and build artefacts"
 
@@ -24,19 +24,45 @@ venv: $(VENV)
 install: $(VENV)
 	$(PIP) install -r requirements.txt
 
+.PHONY: install-dev
+install-dev: $(VENV)
+	$(PIP) install -r requirements-dev.txt
+
+.PHONY: lint
+lint:
+	$(VENV)/bin/ruff check .
+	$(VENV)/bin/mypy camera_orchestrator/ main.py --ignore-missing-imports
+
+.PHONY: fmt
+fmt:
+	$(VENV)/bin/ruff format .
+
 FOLDER ?= ./incoming
+CONFIG ?= config.yaml
 
 .PHONY: batch
 batch:
-	$(PY) main.py batch $(FOLDER) --config config.yaml --annotate
+	$(PY) main.py batch $(FOLDER) --config $(CONFIG) --annotate
 
 .PHONY: batch-fast
 batch-fast:
-	$(PY) main.py batch $(FOLDER) --config config.yaml --annotate --mode fast
+	$(PY) main.py batch $(FOLDER) --config $(CONFIG) --annotate --mode fast
 
 .PHONY: test
 test:
-	$(VENV)/bin/pytest tests/ -v
+	$(VENV)/bin/pytest tests/ -v --ignore=tests/test_integration_solver.py --cov=camera_orchestrator
+
+.PHONY: setup-integration
+setup-integration:
+	docker pull diarmuidk/astrometry-dockerised-solver:latest
+
+.PHONY: test-integration
+test-integration: setup-integration
+	$(VENV)/bin/pytest tests/test_integration_solver.py -v --cov=camera_orchestrator
+
+.PHONY: test-all
+test-all:
+	$(VENV)/bin/pytest tests/ -v --cov=camera_orchestrator
 
 .PHONY: clean
 clean:

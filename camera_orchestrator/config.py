@@ -1,81 +1,52 @@
-"""Config for the watch-and-solve pipeline.
-
-Loads a YAML file into typed sections. All fields have sane defaults, so a
-partial config (or none at all) still works. CLI flags override config values
-in the scripts.
-"""
+"""Typed config — loaded from YAML, validated by Pydantic."""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from typing import Literal, Optional
 
 import yaml
+from pydantic import BaseModel, Field
 
 
-@dataclass
-class SolverCfg:
+class SolverConfig(BaseModel):
     image: str = "diarmuidk/astrometry-dockerised-solver:latest"
     index_dir: str = ""
     cpulimit: int = 60
-    mode: str = "accurate"  # "fast" or "accurate"
+    mode: Literal["fast", "accurate"] = "accurate"
 
     @property
     def solve_args(self) -> list[str]:
         if self.mode == "fast":
-            # Coarser downsample + fewer objects. No --depth limit — with a
-            # 60° search radius, depth 10 is too shallow and kills solutions.
             return ["--downsample", "4", "--objs", "100"]
         return ["--downsample", "2"]
 
 
-@dataclass
-class OpticsCfg:
-    focal_mm: float | None = None          # lens focal length
-    sensor_width_mm: float | None = None    # M50 II APS-C ~= 22.3
+class OpticsConfig(BaseModel):
+    focal_mm: Optional[float] = None
+    sensor_width_mm: Optional[float] = None
 
 
-@dataclass
-class SearchCfg:
-    ra_deg: float | None = None             # search centre (where you're pointing)
-    dec_deg: float | None = None
-    radius_deg: float | None = 60.0         # limit the sky to this arc radius
+class SearchConfig(BaseModel):
+    ra_deg: Optional[float] = None
+    dec_deg: Optional[float] = None
+    radius_deg: float = 60.0
 
 
-@dataclass
-class LocationCfg:
-    lat: float | None = None                # for future alt/az -> RA/Dec
-    lon: float | None = None
+class LocationConfig(BaseModel):
+    lat: Optional[float] = None
+    lon: Optional[float] = None
 
 
-@dataclass
-class WatchCfg:
-    folder: str = "./incoming"
-    poll_interval: float = 1.0
-    process_existing: bool = False
-
-
-@dataclass
-class Config:
-    solver: SolverCfg = field(default_factory=SolverCfg)
-    optics: OpticsCfg = field(default_factory=OpticsCfg)
-    search: SearchCfg = field(default_factory=SearchCfg)
-    location: LocationCfg = field(default_factory=LocationCfg)
-    watch: WatchCfg = field(default_factory=WatchCfg)
+class Config(BaseModel):
+    solver: SolverConfig = Field(default_factory=SolverConfig)
+    optics: OpticsConfig = Field(default_factory=OpticsConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
+    location: LocationConfig = Field(default_factory=LocationConfig)
 
     @classmethod
-    def load(cls, path: str | None = None) -> "Config":
+    def load(cls, path: Optional[str] = None) -> "Config":
         data: dict = {}
         if path and os.path.exists(path):
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
-
-        def section(kind, key):
-            return kind(**(data.get(key) or {}))
-
-        return cls(
-            solver=section(SolverCfg, "solver"),
-            optics=section(OpticsCfg, "optics"),
-            search=section(SearchCfg, "search"),
-            location=section(LocationCfg, "location"),
-            watch=section(WatchCfg, "watch"),
-        )
+        return cls.model_validate(data)

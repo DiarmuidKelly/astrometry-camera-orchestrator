@@ -3,7 +3,10 @@ __pycache__/
 *.pyc
 *.egg-info/
 config.yaml
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
 *.jpg
 *.fits
 *.wcs
-!docs/**/*.jpg
