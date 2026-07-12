@@ -1,0 +1,98 @@
+name: PR Title Validation
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  validate-pr-title:
+    name: Validate PR Title Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check PR title format
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+
+            const patterns = [
+              { regex: /^\[MAJOR\]\s+.+/, type: 'MAJOR', emoji: '🚨' },
+              { regex: /^\[MINOR\]\s+.+/, type: 'MINOR', emoji: '✨' },
+              { regex: /^\[PATCH\]\s+.+/, type: 'PATCH', emoji: '🐛' },
+              { regex: /^\[SKIP\]\s+.+/,  type: 'SKIP',  emoji: '⏭️' },
+              { regex: /^feat(\(.+\))?:\s+.+/,     type: 'MINOR (auto)', emoji: '✨' },
+              { regex: /^fix(\(.+\))?:\s+.+/,      type: 'PATCH (auto)', emoji: '🐛' },
+              { regex: /^docs(\(.+\))?:\s+.+/,     type: 'SKIP (auto)',  emoji: '📚' },
+              { regex: /^chore(\(.+\))?:\s+.+/,    type: 'SKIP (auto)',  emoji: '🔧' },
+              { regex: /^refactor(\(.+\))?:\s+.+/, type: 'PATCH (auto)', emoji: '♻️' },
+              { regex: /^test(\(.+\))?:\s+.+/,     type: 'SKIP (auto)',  emoji: '✅' },
+            ];
+
+            let matched = false;
+            let matchedPattern = null;
+
+            for (const pattern of patterns) {
+              if (pattern.regex.test(title)) {
+                matched = true;
+                matchedPattern = pattern;
+                break;
+              }
+            }
+
+            if (matched) {
+              const message = `${matchedPattern.emoji} **PR Title Valid**\n\n` +
+                `Title: \`${title}\`\n` +
+                `Version bump: **${matchedPattern.type}**`;
+
+              core.info(message);
+
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              });
+
+              const botComment = comments.data.find(c =>
+                c.user.type === 'Bot' && c.body.includes('PR Title')
+              );
+
+              if (botComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: botComment.id,
+                  body: message
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: message
+                });
+              }
+            } else {
+              const errorMessage = `❌ **PR Title Invalid**\n\n` +
+                `Current title: \`${title}\`\n\n` +
+                `**Required format:**\n` +
+                `- \`[MAJOR] description\` — Breaking changes\n` +
+                `- \`[MINOR] description\` — New features\n` +
+                `- \`[PATCH] description\` — Bug fixes\n` +
+                `- \`[SKIP] description\` — No release (docs/chore)\n\n` +
+                `**Or conventional commits:**\n` +
+                `- \`feat: description\`, \`fix: description\`, \`docs: description\`, \`chore: description\``;
+
+              core.setFailed(errorMessage);
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: errorMessage
+              });
+            }

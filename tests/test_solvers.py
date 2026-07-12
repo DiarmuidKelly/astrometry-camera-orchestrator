@@ -1,7 +1,5 @@
 import math
 
-import pytest
-
 from camera_orchestrator.solvers import scale_hint_from_optics
 
 

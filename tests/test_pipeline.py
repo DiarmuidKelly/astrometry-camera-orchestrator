@@ -1,10 +1,7 @@
 from pathlib import Path
 
-import numpy as np
-import pytest
-
 from camera_orchestrator.config import Config
-from camera_orchestrator.models import ImageExif, SolveHints, SolveResult
+from camera_orchestrator.models import SolveResult
 from camera_orchestrator.solvers import build_hints
 from camera_orchestrator.solve import solve_file
 from camera_orchestrator.solvers import Solver
