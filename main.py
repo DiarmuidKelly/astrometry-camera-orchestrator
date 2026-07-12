@@ -18,7 +18,7 @@ from camera_orchestrator.log import get_logger
 from camera_orchestrator.solve import solve_file
 from camera_orchestrator.solvers import build_solver
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".cr2", ".cr3", ".tif", ".tiff", ".fits", ".png"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg"}
 
 log = get_logger("camera_orchestrator.batch")  # reconfigured after config load in main()
 
@@ -68,8 +68,7 @@ def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
     for i, path in enumerate(images, 1):
         log.info("Solving", extra={"image": path.name, "index": i, "total": len(images)})
 
-        out_ext = ".png" if path.suffix.lower() in {".cr2", ".cr3", ".tif", ".tiff", ".fits"} else ".jpg"
-        annotate_out = str(annotate_dir / f"{path.stem}_solved{out_ext}") if annotate_dir else None
+        annotate_out = str(annotate_dir / f"{path.stem}_solved.jpg") if annotate_dir else None
 
         job = solve_file(str(path), solver, cfg, annotate_out=annotate_out)
         record = job.to_record(cfg)
