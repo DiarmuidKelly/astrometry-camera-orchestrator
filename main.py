@@ -2,9 +2,8 @@
 """camera-orchestrator — entry point.
 
 Usage:
-    python main.py batch <folder> [--config config.yaml] [--annotate] [--mode fast|accurate]
-    python main.py grab [--out ./incoming] [--force]
-    python main.py poll --interval 5 [--out ./incoming] [--force]
+    python main.py --config config.yaml batch <folder> [--annotate] [--mode fast|accurate]
+    python main.py --config config.yaml grab [--out ./incoming] [--force] [--poll SECONDS]
 """
 from __future__ import annotations
 
