@@ -18,7 +18,7 @@ Early-stage Python tool for plate-solving astrophotography frames using a docker
 ## Setup
 
 ```bash
-make install-dev
+make install
 cp config.example.yaml config.yaml   # edit paths and optics
 ```
 
@@ -30,6 +30,20 @@ make batch-fast FOLDER=/path/to/images        # faster, lower accuracy
 make batch FOLDER=/path/to/images CONFIG=my.yaml
 ```
 
+Both targets call `python main.py batch` under the hood. Full options:
+
+```
+positional arguments:
+  folder                Folder containing images
+
+options:
+  --config CONFIG       Config YAML path (default: config.yaml)
+  --annotate            Save annotated overlay to <folder>/annotated/
+  --mode {fast,accurate}
+                        Override solver mode from config
+  --cpulimit CPULIMIT   Override solver CPU time limit in seconds
+```
+
 ## Config
 
 `config.yaml` holds static settings — solver image, index dir, optics (focal length, sensor width), observer location, and search region hints. The image folder is always passed as a CLI argument.
@@ -37,6 +51,7 @@ make batch FOLDER=/path/to/images CONFIG=my.yaml
 ## Development
 
 ```bash
+make install-dev           # install runtime + dev dependencies
 make test                  # unit tests
 make test-integration      # requires Docker + index files
 make lint                  # ruff + mypy
