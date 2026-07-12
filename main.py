@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from camera_orchestrator.config import Config
-from camera_orchestrator.grab import grab_latest, poll
+from camera_orchestrator.grab import GrabError, grab_latest, poll
 from camera_orchestrator.log import get_logger
 from camera_orchestrator.solve import solve_file
 from camera_orchestrator.solvers import build_solver
@@ -133,10 +133,14 @@ def main() -> None:
     if args.command == "grab":
         out_dir = Path(args.out) if args.out else Path(cfg.grab.out_dir)
         interval = args.poll if args.poll is not None else cfg.grab.poll_interval
-        if interval is not None:
-            poll(out_dir, interval=interval, force=args.force)
-        else:
-            grab_latest(out_dir, force=args.force)
+        try:
+            if interval is not None:
+                poll(out_dir, interval=interval, force=args.force)
+            else:
+                grab_latest(out_dir, force=args.force)
+        except GrabError as exc:
+            log.error(str(exc))
+            sys.exit(1)
         return
 
     if args.command == "batch":

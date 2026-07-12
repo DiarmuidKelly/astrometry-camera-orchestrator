@@ -7,13 +7,16 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 import time
 from pathlib import Path
 
 from camera_orchestrator.log import get_logger
 
 log = get_logger("camera_orchestrator.grab")
+
+
+class GrabError(Exception):
+    """Raised when gphoto2 returns a non-zero exit code."""
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -33,8 +36,7 @@ def list_files() -> list[tuple[int, str]]:
     """Return [(file_number, filename), ...] from gphoto2 --list-files."""
     result = run(["gphoto2", "--list-files"])
     if result.returncode != 0:
-        log.error("gphoto2 list-files failed", extra={"stderr": result.stderr.strip()})
-        sys.exit(1)
+        raise GrabError(f"gphoto2 list-files failed: {result.stderr.strip()}")
     files = []
     for line in result.stdout.splitlines():
         m = re.match(r"#(\d+)\s+(\S+)", line.strip())
@@ -43,24 +45,28 @@ def list_files() -> list[tuple[int, str]]:
     return files
 
 
-def _download(num: int, file_name: str, out_dir: Path, force: bool) -> bool:
-    """Download a single file by number. Returns True on success."""
+def _download(num: int, file_name: str, out_dir: Path, force: bool) -> Path | None:
+    """Download a single file by number. Returns the destination path on success, None if skipped."""
     dest = out_dir / file_name
     if dest.exists() and not force:
         log.info("Already exists, skipping  (pass --force to overwrite)", extra={"dest": str(dest)})
-        return False
+        return None
     cmd = ["gphoto2", "--get-file", str(num), "--filename", str(dest)]
     if force:
         cmd.append("--force-overwrite")
     result = run(cmd)
     if result.returncode != 0:
-        log.error("Download failed", extra={"file_name": file_name, "stderr": result.stderr.strip()})
-        return False
+        raise GrabError(f"Download failed for {file_name}: {result.stderr.strip()}")
     log.info("Saved", extra={"dest": str(dest)})
-    return True
+    return dest
 
 
-def grab_latest(out_dir: Path, force: bool = False) -> None:
+def grab_latest(out_dir: Path, force: bool = False) -> Path | None:
+    """Download the latest file from the camera.
+
+    Returns the path of the downloaded file, or None if already exists and force is False.
+    Raises GrabError if the camera is unreachable or the download fails.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Releasing gvfs mount")
@@ -70,16 +76,19 @@ def grab_latest(out_dir: Path, force: bool = False) -> None:
     files = list_files()
     if not files:
         log.info("No files found on camera")
-        sys.exit(0)
+        return None
 
     num, file_name = files[-1]
     log.info("Latest file", extra={"file_num": num, "file_name": file_name})
-    if not _download(num, file_name, out_dir, force):
-        sys.exit(0)
+    return _download(num, file_name, out_dir, force)
 
 
 def poll(out_dir: Path, interval: float, force: bool = False) -> None:
-    """Poll the camera for new files and download them as they appear."""
+    """Poll the camera for new files and download them as they appear.
+
+    Yields control back to the caller via KeyboardInterrupt — intended for CLI use.
+    For programmatic use, call list_files() and _download() directly in your own loop.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Releasing gvfs mount")
