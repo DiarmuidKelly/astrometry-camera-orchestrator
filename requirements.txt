@@ -8,3 +8,4 @@ PyYAML>=6.0
 exifread>=3.0
 pydantic>=2.0
 
+gphoto2>=2.6

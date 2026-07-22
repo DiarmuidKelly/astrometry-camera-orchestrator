@@ -11,3 +11,4 @@ incoming/
 *.jpg
 *.fits
 *.wcs
+tools/
