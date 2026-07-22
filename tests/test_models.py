@@ -1,6 +1,7 @@
 import json
 
 from camera_orchestrator.models import (
+    CaptureRequest,
     ImageExif,
     ObserverInfo,
     SolveHints,
@@ -81,3 +82,24 @@ def test_solve_hints_all_optional():
     hints = SolveHints()
     assert hints.scale_low is None
     assert hints.ra_deg is None
+
+
+def test_capture_request_to_settings_manual():
+    req = CaptureRequest(out_dir="x", iso="800", shutter="1/60", aperture="4", image_format="both")
+    s = req.to_settings()
+    assert s.exposure_mode == "Manual"
+    assert s.iso == "800"
+    assert s.shutter == "1/60"
+    assert s.aperture == "4"
+    assert s.image_format == "both"
+
+
+def test_capture_request_to_settings_bulb():
+    req = CaptureRequest(out_dir="x", iso="800", bulb_seconds=30.0)
+    s = req.to_settings()
+    assert s.exposure_mode == "Bulb"
+
+
+def test_capture_request_defaults_to_card():
+    # Default is card-only (download opt-in).
+    assert CaptureRequest(out_dir="x").download is False
