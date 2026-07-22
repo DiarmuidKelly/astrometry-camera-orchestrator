@@ -1,10 +1,10 @@
 from pathlib import Path
 
 from camera_orchestrator.config import Config
-from camera_orchestrator.models import SolveResult
-from camera_orchestrator.solvers import build_hints
-from camera_orchestrator.solve import solve_file
-from camera_orchestrator.solvers import Solver
+from camera_orchestrator.domain.models import SolveResult
+from camera_orchestrator.application.solve_service import build_hints
+from camera_orchestrator.application.solve_service import solve_file
+from camera_orchestrator.domain.ports.solver import Solver
 
 SAMPLE_IMAGE = str(Path(__file__).parent / "fixtures" / "IMG_4341.JPG")
 

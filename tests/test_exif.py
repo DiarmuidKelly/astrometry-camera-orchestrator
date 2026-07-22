@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from camera_orchestrator.utils.exif import read_exif
-from camera_orchestrator.models import ImageExif
+from camera_orchestrator.adapters.exif import read_exif
+from camera_orchestrator.domain.models import ImageExif
 
 SAMPLE_IMAGE = str(Path(__file__).parent / "fixtures" / "IMG_4341.JPG")
 

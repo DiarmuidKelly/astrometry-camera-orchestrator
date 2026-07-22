@@ -9,8 +9,10 @@ import tempfile
 import cv2
 import numpy as np
 
-from ..models import SolveHints, SolveResult
-from .base import Solver, result_from_wcs, write_fits
+from camera_orchestrator.domain.models.solve import SolveHints, SolveResult
+from camera_orchestrator.domain.ports.solver import Solver
+
+from .fits import result_from_wcs, write_fits
 
 
 class DockerSolver(Solver):

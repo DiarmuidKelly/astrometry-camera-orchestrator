@@ -15,10 +15,12 @@ from pathlib import Path
 
 import gphoto2 as gp
 
-from ..grab import unmount_gvfs
-from ..log import get_logger
-from ..models import CameraStatus, CaptureSettings
-from .base import Camera, CameraError, CameraFile
+from camera_orchestrator.domain.errors import CameraError
+from camera_orchestrator.domain.models.camera import CameraFile, CameraStatus, CaptureSettings
+from camera_orchestrator.domain.ports.camera import Camera
+from camera_orchestrator.log import get_logger
+
+from .gvfs import unmount_gvfs
 
 log = get_logger("camera_orchestrator.camera")
 

@@ -8,7 +8,7 @@ Usage:
     python main.py --config config.yaml grab [--out ./incoming] [--force] [--poll SECONDS]
     python main.py --config config.yaml capture [--iso 800 --shutter 2 --count 30 ...]
 """
-from camera_orchestrator.cmd import main
+from camera_orchestrator.interfaces.cli import main
 
 if __name__ == "__main__":
     main()

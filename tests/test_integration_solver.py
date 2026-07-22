@@ -13,8 +13,8 @@ import cv2
 import pytest
 
 from camera_orchestrator.config import Config
-from camera_orchestrator.models import SolveHints
-from camera_orchestrator.solvers import DockerSolver
+from camera_orchestrator.domain.models import SolveHints
+from camera_orchestrator.adapters.solvers import DockerSolver
 
 SAMPLE_IMAGE = str(Path(__file__).parent / "fixtures" / "IMG_4341.JPG")
 CONFIG_PATH = "config.yaml"

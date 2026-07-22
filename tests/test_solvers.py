@@ -1,6 +1,6 @@
 import math
 
-from camera_orchestrator.solvers import scale_hint_from_optics
+from camera_orchestrator.domain.optics import scale_hint_from_optics
 
 
 def test_scale_hint_200mm_apsc():
