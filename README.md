@@ -8,7 +8,7 @@ Python tool for plate-solving astrophotography frames using a dockerised [astrom
 - Writes per-image `_solved.json` sidecars with EXIF, astrometric solution, and observer metadata
 - Produces NGC-annotated overlay images
 - Uses scale hints derived from EXIF focal length + sensor geometry to speed up solving
-- Tethered capture from a Canon DSLR (5D Mark II) via python-gphoto2 — set ISO/shutter/aperture, single or bulb exposures, sequences to card or downloaded
+- Tethered capture from a Canon DSLR (5D Mark II) via python-gphoto2 — set ISO/shutter/aperture, single or bulb exposures, sequences to card or downloaded (JPEG)
 - Grabs the latest image from a connected Canon camera via gphoto2 (one-shot or polled)
 
 ## Requirements
@@ -78,7 +78,7 @@ card-only by default (fast for bulk sequences); `--download` transfers to `--out
 python main.py capture --status
 python main.py capture --iso 800 --shutter 2 --count 30                 # 30 subs to the card
 python main.py capture --iso 800 --shutter 2 --count 30 --download      # download each frame
-python main.py capture --bulb 30 --count 20 --format both --download    # 30s bulb subs, RAW+JPEG
+python main.py capture --bulb 30 --count 20 --download                  # 30s bulb subs
 ```
 
 Notes:
