@@ -89,18 +89,18 @@ make fmt     # ruff format
 
 ## Dev commands
 
-The Makefile is **dev tooling only** (install, lint, test, fmt, clean) — it does
-nothing functional. Run the app via the Python CLI: `python main.py <cmd>`,
-`./main.py <cmd>`, or `python -m camera_orchestrator <cmd>` (venv active).
+Dependencies/env are managed by **uv** (`pyproject.toml` + `uv.lock`; version is
+read from the `VERSION` file). The Makefile is **dev tooling only** and wraps uv;
+run the app via the console script or `uv run`.
 
 ```bash
-make install-dev            # runtime + dev deps
-make lint                   # ruff + mypy
-make test                   # pytest
+make install-dev            # uv sync (runtime + dev group)
+make lint                   # uv run ruff + mypy
+make test                   # uv run pytest
 
-python main.py batch <folder> --annotate
-python main.py grab --poll 5
-python main.py capture --status
-python main.py capture --iso 800 --shutter 2 --count 30            # card-only
-python main.py capture --iso 800 --shutter 2 --count 30 --download # to disk
+uv run camera-orchestrator batch <folder> --annotate
+uv run camera-orchestrator grab --poll 5
+uv run camera-orchestrator capture --status
+uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30            # card-only
+uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30 --download # to disk
 ```

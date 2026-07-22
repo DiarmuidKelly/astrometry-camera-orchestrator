@@ -1,0 +1,39 @@
+[project]
+name = "camera-orchestrator"
+description = "Plate-solving and tethered capture for astrophotography"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+dynamic = ["version"]
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "astropy>=6.0",
+    "PyYAML>=6.0",
+    "exifread>=3.0",
+    "pydantic>=2.0",
+    "gphoto2>=2.6",
+]
+
+[project.scripts]
+camera-orchestrator = "camera_orchestrator.interfaces.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Version is read from the plain-text VERSION file so the auto-release workflow
+# (which bumps VERSION) keeps working unchanged.
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[tool.setuptools.packages.find]
+include = ["camera_orchestrator*"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]

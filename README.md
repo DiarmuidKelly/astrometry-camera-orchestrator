@@ -20,21 +20,24 @@ Python tool for plate-solving astrophotography frames using a dockerised [astrom
 
 ## Setup
 
+Uses [uv](https://docs.astral.sh/uv/) for dependency and environment management.
+
 ```bash
-make install
+uv sync                              # create the env + install deps
 cp config.example.yaml config.yaml   # edit paths and optics
 ```
 
 ## Usage
 
-Run the CLI directly (activate the venv first with `source .venv/bin/activate`,
-or prefix with `.venv/bin/python`). All three forms are equivalent:
+Run the CLI with uv (no manual venv activation needed):
 
 ```bash
-python main.py <command> ...
-./main.py <command> ...
-python -m camera_orchestrator <command> ...
+uv run camera-orchestrator <command> ...   # installed console script
+uv run python main.py <command> ...        # equivalent
 ```
+
+The examples below use `python main.py …`; prefix them with `uv run`, or run
+`uv sync` once and activate `.venv` (`source .venv/bin/activate`).
 
 ### Batch solve
 
