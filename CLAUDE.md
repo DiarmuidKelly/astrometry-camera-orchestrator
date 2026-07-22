@@ -59,13 +59,19 @@ Full rationale: `docs/20260722-hexagonal-architecture.md`.
 
 ## Guardrails (must stay green)
 
+**Use the Makefile for dev tasks** — run these, don't invoke pytest/ruff/mypy directly:
+
 ```bash
+make test    # pytest — no hardware needed; must pass
 make lint    # ruff + mypy — both must pass clean
-make test    # pytest (69+), no hardware needed
+make fmt     # ruff format
 ```
 
 - `domain/` must have no runtime external imports (numpy only under TYPE_CHECKING).
+- New code lands with its test (e.g. a new port impl gets a round-trip test).
 - Prefer editing to match surrounding style; keep docstrings + Field descriptions.
+- The Makefile is the interface for dev tooling; the app itself runs via the
+  Python CLI (`python main.py --help`), never through make.
 
 ## Domain notes (astro / hardware)
 
