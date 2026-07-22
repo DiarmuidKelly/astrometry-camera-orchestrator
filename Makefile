@@ -2,22 +2,22 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
+# Dev tooling only (setup, lint, test). The app is a Python CLI — for usage run:
+#   python main.py --help     (or ./main.py --help, python -m camera_orchestrator --help)
+
 .PHONY: help
 help:
-	@echo "camera-orchestrator"
-	@echo ""
-	@echo "  make batch FOLDER=<path> [CONFIG=config.yaml]       plate-solve all images in a folder"
-	@echo "  make batch-fast FOLDER=<path> [CONFIG=config.yaml]  fast solve (lower accuracy)"
-	@echo "  make grab [OUT=<path>]         download latest image from camera"
-	@echo "  make grab POLL=5 [OUT=<path>]  poll camera every N seconds"
-	@echo "  note: use VAR=value syntax, not --flags (e.g. make grab POLL=5, not make grab --poll=5)"
+	@echo "camera-orchestrator — dev tooling"
 	@echo ""
 	@echo "  make install                 install runtime deps"
 	@echo "  make install-dev             install runtime + dev deps"
 	@echo "  make test                    run unit tests"
+	@echo "  make test-integration        integration tests (needs Docker + indexes)"
 	@echo "  make lint                    ruff + mypy"
 	@echo "  make fmt                     ruff format"
 	@echo "  make clean                   remove venv and build artefacts"
+	@echo ""
+	@echo "  app usage: python main.py --help"
 
 $(VENV):
 	python3 -m venv $(VENV)
@@ -42,24 +42,6 @@ lint:
 .PHONY: fmt
 fmt:
 	$(VENV)/bin/ruff format .
-
-FOLDER ?= ./incoming
-CONFIG ?= config.yaml
-
-.PHONY: batch
-batch:
-	$(PY) main.py --config $(CONFIG) batch $(FOLDER) --annotate
-
-.PHONY: batch-fast
-batch-fast:
-	$(PY) main.py --config $(CONFIG) batch $(FOLDER) --annotate --mode fast
-
-OUT ?=
-POLL ?=
-
-.PHONY: grab
-grab:
-	$(PY) main.py --config $(CONFIG) grab $(if $(OUT),--out $(OUT)) $(if $(POLL),--poll $(POLL))
 
 .PHONY: test
 test:

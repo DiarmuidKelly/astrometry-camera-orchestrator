@@ -83,10 +83,17 @@ make test    # pytest (69+), no hardware needed
 
 ## Dev commands
 
+The Makefile is **dev tooling only** (install, lint, test, fmt, clean) — it does
+nothing functional. Run the app via the Python CLI: `python main.py <cmd>`,
+`./main.py <cmd>`, or `python -m camera_orchestrator <cmd>` (venv active).
+
 ```bash
 make install-dev            # runtime + dev deps
-make batch FOLDER=<path>    # plate-solve a folder
-make grab [POLL=5]          # pull latest / poll (VAR=value, not --flags)
+make lint                   # ruff + mypy
+make test                   # pytest
+
+python main.py batch <folder> --annotate
+python main.py grab --poll 5
 python main.py capture --status
 python main.py capture --iso 800 --shutter 2 --count 30            # card-only
 python main.py capture --iso 800 --shutter 2 --count 30 --download # to disk

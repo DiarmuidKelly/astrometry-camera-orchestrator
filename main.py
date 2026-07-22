@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """camera-orchestrator — entry point.
 
-Thin shim: all CLI logic lives in camera_orchestrator/cmd.py.
+Thin shim; all CLI logic lives in camera_orchestrator/interfaces/cli.py.
+Equivalent ways to run (venv active, or use .venv/bin/python):
 
-Usage:
-    python main.py --config config.yaml batch <folder> [--annotate] [--mode fast|accurate]
-    python main.py --config config.yaml grab [--out ./incoming] [--force] [--poll SECONDS]
-    python main.py --config config.yaml capture [--iso 800 --shutter 2 --count 30 ...]
+    python main.py <command> ...
+    ./main.py <command> ...                 # executable
+    python -m camera_orchestrator <command> ...
+
+Commands: batch <folder>, grab, capture. Use `<cmd> --help` for options.
 """
 from camera_orchestrator.interfaces.cli import main
 

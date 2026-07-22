@@ -27,14 +27,23 @@ cp config.example.yaml config.yaml   # edit paths and optics
 
 ## Usage
 
+Run the CLI directly (activate the venv first with `source .venv/bin/activate`,
+or prefix with `.venv/bin/python`). All three forms are equivalent:
+
+```bash
+python main.py <command> ...
+./main.py <command> ...
+python -m camera_orchestrator <command> ...
+```
+
 ### Batch solve
 
 ```bash
-make batch FOLDER=/path/to/images
-make batch-fast FOLDER=/path/to/images   # faster, lower accuracy
+python main.py batch /path/to/images --annotate
+python main.py batch /path/to/images --annotate --mode fast   # faster, lower accuracy
 ```
 
-Full options via `python main.py --config config.yaml batch --help`:
+Full options via `python main.py batch --help`:
 
 ```
 positional arguments:
@@ -50,17 +59,15 @@ options:
 
 ### Camera grab
 
-Requires the camera connected via USB in mass storage mode. gvfs is unmounted automatically before listing files.
+gvfs is unmounted automatically before listing files.
 
 ```bash
-make grab                # download latest image to grab.out_dir from config
-make grab POLL=5         # poll every 5 seconds, download new images as they appear
-make grab OUT=~/Pictures # override output directory
+python main.py grab                   # download latest image to grab.out_dir from config
+python main.py grab --poll 5          # poll every 5s, download new images as they appear
+python main.py grab --out ~/Pictures  # override output directory
 ```
 
-Note: Make uses `VAR=value` syntax, not `--flags` (e.g. `make grab POLL=5`, not `make grab --poll=5`).
-
-Full options via `python main.py --config config.yaml grab --help`:
+Full options via `python main.py grab --help`:
 
 ```
 options:
@@ -104,7 +111,7 @@ grab:
 | `LOG_FORMAT` | `text` `json` | Override log format (json = one JSON object per line) |
 
 ```bash
-LOG_LEVEL=DEBUG LOG_FORMAT=json make batch FOLDER=/path/to/images
+LOG_LEVEL=DEBUG LOG_FORMAT=json python main.py batch /path/to/images
 ```
 
 ## Architecture
