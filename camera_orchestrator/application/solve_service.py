@@ -7,10 +7,35 @@ from __future__ import annotations
 
 import cv2
 
-from .config import Config
-from .models import SolveJob
-from .solvers import Solver, build_hints
-from .utils.exif import read_exif
+from camera_orchestrator.adapters.exif import read_exif
+from camera_orchestrator.config import Config
+from camera_orchestrator.domain.models.solve import SolveHints, SolveJob
+from camera_orchestrator.domain.optics import scale_hint_from_optics
+from camera_orchestrator.domain.ports.solver import Solver
+
+
+def build_hints(cfg: Config, exif_focal_mm: float | None, frame_width_px: int) -> SolveHints:
+    """Assemble SolveHints from config + per-image focal length.
+
+    EXIF focal length takes priority over the config fallback so a mixed batch
+    (70mm + 200mm in the same folder) gets the correct scale hint per frame.
+    Position hints (RA/Dec/radius) always come from config. Bridges the
+    infrastructure Config into a domain SolveHints — an application concern.
+    """
+    focal_mm = exif_focal_mm or cfg.optics.focal_mm
+    sensor_w = cfg.optics.sensor_width_mm
+
+    scale_low = scale_high = None
+    if focal_mm and sensor_w and frame_width_px:
+        scale_low, scale_high = scale_hint_from_optics(focal_mm, sensor_w, frame_width_px)
+
+    return SolveHints(
+        scale_low=scale_low,
+        scale_high=scale_high,
+        ra_deg=cfg.search.ra_deg,
+        dec_deg=cfg.search.dec_deg,
+        radius_deg=cfg.search.radius_deg,
+    )
 
 
 def solve_file(

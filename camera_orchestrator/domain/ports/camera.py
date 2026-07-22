@@ -1,28 +1,14 @@
-"""Abstract camera interface — atomic operations only.
+"""Camera port — the abstract interface every camera backend implements.
 
-Mirrors solvers/base.py. The driver exposes small, single-purpose primitives
-that map to what libgphoto2 actually offers (trigger, wait, list, download).
-Higher-level workflows (capture-and-download, sequences, framing) are compositions
-built in the service layer — not baked into the driver.
+Atomic operations only. Higher-level workflows (capture-and-download, sequences)
+are composed in the application layer, not baked into the driver.
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import NamedTuple
 
-from ..models import CameraStatus, CaptureSettings
-
-
-class CameraError(Exception):
-    """Raised when a camera operation fails (connection, claim, capture)."""
-
-
-class CameraFile(NamedTuple):
-    """A file as it exists on the camera (not yet downloaded)."""
-
-    folder: str
-    name: str
+from ..models.camera import CameraFile, CameraStatus, CaptureSettings
 
 
 class Camera(ABC):

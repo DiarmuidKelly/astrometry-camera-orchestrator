@@ -11,12 +11,17 @@ import json
 import sys
 from pathlib import Path
 
-from .config import Config
-from .grab import GrabError, grab_latest, poll
-from .log import get_logger
-from .models import CameraStatus, CaptureRequest
-from .solve import solve_file
-from .solvers import build_solver
+from camera_orchestrator.application.grab_service import grab_latest, poll
+from camera_orchestrator.application.solve_service import solve_file
+from camera_orchestrator.composition import (
+    build_capture_service,
+    build_repository,
+    build_solver,
+)
+from camera_orchestrator.config import Config
+from camera_orchestrator.domain.errors import CameraError, GrabError
+from camera_orchestrator.domain.models.camera import CameraStatus, CaptureRequest
+from camera_orchestrator.log import get_logger
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg"}
 
@@ -25,6 +30,7 @@ log = get_logger("camera_orchestrator.batch")  # reconfigured after config load 
 
 def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
     solver = build_solver(cfg)
+    repo = build_repository()
 
     folder = Path(args.folder)
     images = sorted(
@@ -39,7 +45,7 @@ def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
     sidecar_dir = folder / "annotated" if args.annotate else folder
 
     if not args.reprocess:
-        pending = [p for p in images if not (sidecar_dir / f"{p.stem}_solved.json").exists()]
+        pending = [p for p in images if not repo.exists(p.name, str(sidecar_dir))]
         skipped = len(images) - len(pending)
         if skipped:
             log.info("Skipping already-solved images — pass --reprocess to re-solve all",
@@ -73,8 +79,7 @@ def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
         job = solve_file(str(path), solver, cfg, annotate_out=annotate_out)
         record = job.to_record(cfg)
 
-        sidecar_path = sidecar_dir / f"{path.stem}_solved.json"
-        sidecar_path.write_text(record.model_dump_json(indent=2))
+        repo.save(record, str(sidecar_dir))
         summary.append(record.model_dump())
 
         if job.solved and record.solve is not None:
@@ -106,11 +111,7 @@ def _log_status(status: CameraStatus) -> None:
 
 
 def cmd_capture(args: argparse.Namespace, cfg: Config) -> None:
-    # Imported lazily so the rest of the CLI works without python-gphoto2 installed.
-    from .camera import CameraError
-    from .service import CaptureService
-
-    service = CaptureService()
+    service = build_capture_service()
     try:
         if args.status:
             _log_status(service.status())

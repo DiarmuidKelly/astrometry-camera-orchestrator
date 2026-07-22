@@ -14,10 +14,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from .camera.base import Camera, CameraError
-from .camera.gphoto import GphotoCamera
-from .log import get_logger
-from .models import CameraStatus, CaptureRequest, CaptureResult
+from camera_orchestrator.domain.errors import CameraError
+from camera_orchestrator.domain.models.camera import (
+    CameraStatus,
+    CaptureRequest,
+    CaptureResult,
+)
+from camera_orchestrator.domain.ports.camera import Camera
+from camera_orchestrator.log import get_logger
 
 log = get_logger("camera_orchestrator.service")
 
@@ -31,7 +35,12 @@ FrameCallback = Callable[[int, int, list[Path]], None]
 class CaptureService:
     """Runs status and capture workflows against a camera backend."""
 
-    def __init__(self, camera_factory: CameraFactory = GphotoCamera):
+    def __init__(self, camera_factory: CameraFactory):
+        """Args:
+            camera_factory: Zero-arg callable returning an open Camera. The
+                composition root injects the concrete adapter (GphotoCamera);
+                tests inject a mock. The service never imports an adapter.
+        """
         self._camera_factory = camera_factory
 
     def status(self) -> CameraStatus:

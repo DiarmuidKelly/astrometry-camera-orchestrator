@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import exifread
 
-from ..models import ImageExif
+from camera_orchestrator.domain.models.solve import ImageExif
 
 
 def read_exif(path: str) -> ImageExif:

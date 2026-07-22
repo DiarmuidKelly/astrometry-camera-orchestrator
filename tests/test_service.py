@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from camera_orchestrator.camera.base import Camera, CameraError, CameraFile
-from camera_orchestrator.models import CameraStatus, CaptureRequest, CaptureSettings
-from camera_orchestrator.service import CaptureService
+from camera_orchestrator.application.capture_service import CaptureService
+from camera_orchestrator.domain.errors import CameraError
+from camera_orchestrator.domain.models import CameraStatus, CaptureRequest, CaptureSettings
+from camera_orchestrator.domain.models.camera import CameraFile
+from camera_orchestrator.domain.ports.camera import Camera
 
 
 class MockCamera(Camera):

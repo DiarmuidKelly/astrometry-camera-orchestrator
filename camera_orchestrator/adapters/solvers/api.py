@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..models import SolveHints, SolveResult
-from .base import Solver
+from camera_orchestrator.domain.models.solve import SolveHints, SolveResult
+from camera_orchestrator.domain.ports.solver import Solver
 
 
 class ApiSolver(Solver):

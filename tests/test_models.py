@@ -1,6 +1,6 @@
 import json
 
-from camera_orchestrator.models import (
+from camera_orchestrator.domain.models import (
     CaptureRequest,
     ImageExif,
     ObserverInfo,

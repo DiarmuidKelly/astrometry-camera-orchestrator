@@ -1,4 +1,4 @@
-"""Tests for camera_orchestrator.grab — all subprocess calls are mocked."""
+"""Tests for the grab adapters/service — all subprocess calls are mocked."""
 from __future__ import annotations
 
 import subprocess
@@ -6,8 +6,13 @@ from unittest.mock import patch
 
 import pytest
 
-import camera_orchestrator.grab as grab
-from camera_orchestrator.grab import GrabError
+from camera_orchestrator.adapters.camera import cli_grab, gvfs
+from camera_orchestrator.application import grab_service
+from camera_orchestrator.domain.errors import GrabError
+
+CLI = "camera_orchestrator.adapters.camera.cli_grab"
+GVFS = "camera_orchestrator.adapters.camera.gvfs"
+SVC = "camera_orchestrator.application.grab_service"
 
 
 def _proc(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess:
@@ -28,19 +33,19 @@ There are 3 files on camera
 
 class TestListFiles:
     def test_parses_file_numbers_and_names(self):
-        with patch("camera_orchestrator.grab.run", return_value=_proc(LIST_OUTPUT)):
-            files = grab.list_files()
+        with patch(f"{CLI}.run", return_value=_proc(LIST_OUTPUT)):
+            files = cli_grab.list_files()
         assert files == [(1, "IMG_4001.CR3"), (2, "IMG_4001.JPG"), (3, "IMG_4002.JPG")]
 
     def test_returns_empty_for_no_matches(self):
-        with patch("camera_orchestrator.grab.run", return_value=_proc("There are 0 files on camera\n")):
-            files = grab.list_files()
+        with patch(f"{CLI}.run", return_value=_proc("There are 0 files on camera\n")):
+            files = cli_grab.list_files()
         assert files == []
 
     def test_raises_grab_error_on_gphoto2_failure(self):
-        with patch("camera_orchestrator.grab.run", return_value=_proc_err("Could not claim interface 0")):
+        with patch(f"{CLI}.run", return_value=_proc_err("Could not claim interface 0")):
             with pytest.raises(GrabError, match="list-files failed"):
-                grab.list_files()
+                cli_grab.list_files()
 
 
 class TestUnmountGvfs:
@@ -54,8 +59,8 @@ class TestUnmountGvfs:
                 return _proc(list_output)
             return _proc()
 
-        with patch("camera_orchestrator.grab.run", side_effect=fake_run):
-            grab.unmount_gvfs()
+        with patch(f"{GVFS}.run", side_effect=fake_run):
+            gvfs.unmount_gvfs()
 
         assert any("-u" in c for c in calls)
 
@@ -66,67 +71,67 @@ class TestUnmountGvfs:
             calls.append(cmd)
             return _proc("No mounts found\n")
 
-        with patch("camera_orchestrator.grab.run", side_effect=fake_run):
-            grab.unmount_gvfs()
+        with patch(f"{GVFS}.run", side_effect=fake_run):
+            gvfs.unmount_gvfs()
 
         assert not any("-u" in c for c in calls)
 
 
 class TestDownload:
     def test_returns_dest_path_on_success(self, tmp_path):
-        with patch("camera_orchestrator.grab.run", return_value=_proc()):
-            result = grab._download(3, "IMG_4002.JPG", tmp_path, force=False)
+        with patch(f"{CLI}.run", return_value=_proc()):
+            result = cli_grab.download(3, "IMG_4002.JPG", tmp_path, force=False)
         assert result == tmp_path / "IMG_4002.JPG"
 
     def test_returns_none_for_existing_file_without_force(self, tmp_path):
         (tmp_path / "IMG_4002.JPG").touch()
-        with patch("camera_orchestrator.grab.run") as mock_run:
-            result = grab._download(3, "IMG_4002.JPG", tmp_path, force=False)
+        with patch(f"{CLI}.run") as mock_run:
+            result = cli_grab.download(3, "IMG_4002.JPG", tmp_path, force=False)
         assert result is None
         mock_run.assert_not_called()
 
     def test_force_overwrites_existing_file(self, tmp_path):
         (tmp_path / "IMG_4002.JPG").touch()
-        with patch("camera_orchestrator.grab.run", return_value=_proc()) as mock_run:
-            result = grab._download(3, "IMG_4002.JPG", tmp_path, force=True)
+        with patch(f"{CLI}.run", return_value=_proc()) as mock_run:
+            result = cli_grab.download(3, "IMG_4002.JPG", tmp_path, force=True)
         assert result == tmp_path / "IMG_4002.JPG"
         cmd = mock_run.call_args[0][0]
         assert "--force-overwrite" in cmd
 
     def test_raises_grab_error_on_gphoto2_failure(self, tmp_path):
-        with patch("camera_orchestrator.grab.run", return_value=_proc_err("error")):
+        with patch(f"{CLI}.run", return_value=_proc_err("error")):
             with pytest.raises(GrabError, match="Download failed"):
-                grab._download(3, "IMG_4002.JPG", tmp_path, force=False)
+                cli_grab.download(3, "IMG_4002.JPG", tmp_path, force=False)
 
 
 class TestGrabLatest:
     def test_returns_path_of_downloaded_file(self, tmp_path):
         dest = tmp_path / "IMG_4002.JPG"
-        with patch("camera_orchestrator.grab.unmount_gvfs"), \
-             patch("camera_orchestrator.grab.list_files", return_value=[(1, "IMG_4001.JPG"), (2, "IMG_4002.JPG")]), \
-             patch("camera_orchestrator.grab._download", return_value=dest) as mock_dl:
-            result = grab.grab_latest(tmp_path)
+        with patch(f"{SVC}.unmount_gvfs"), \
+             patch(f"{SVC}.list_files", return_value=[(1, "IMG_4001.JPG"), (2, "IMG_4002.JPG")]), \
+             patch(f"{SVC}.download", return_value=dest) as mock_dl:
+            result = grab_service.grab_latest(tmp_path)
         assert result == dest
         mock_dl.assert_called_once_with(2, "IMG_4002.JPG", tmp_path, False)
 
     def test_returns_none_when_no_files(self, tmp_path):
-        with patch("camera_orchestrator.grab.unmount_gvfs"), \
-             patch("camera_orchestrator.grab.list_files", return_value=[]):
-            result = grab.grab_latest(tmp_path)
+        with patch(f"{SVC}.unmount_gvfs"), \
+             patch(f"{SVC}.list_files", return_value=[]):
+            result = grab_service.grab_latest(tmp_path)
         assert result is None
 
     def test_returns_none_when_file_already_exists(self, tmp_path):
-        with patch("camera_orchestrator.grab.unmount_gvfs"), \
-             patch("camera_orchestrator.grab.list_files", return_value=[(2, "IMG_4002.JPG")]), \
-             patch("camera_orchestrator.grab._download", return_value=None):
-            result = grab.grab_latest(tmp_path)
+        with patch(f"{SVC}.unmount_gvfs"), \
+             patch(f"{SVC}.list_files", return_value=[(2, "IMG_4002.JPG")]), \
+             patch(f"{SVC}.download", return_value=None):
+            result = grab_service.grab_latest(tmp_path)
         assert result is None
 
     def test_propagates_grab_error(self, tmp_path):
-        with patch("camera_orchestrator.grab.unmount_gvfs"), \
-             patch("camera_orchestrator.grab.list_files", side_effect=GrabError("camera gone")):
+        with patch(f"{SVC}.unmount_gvfs"), \
+             patch(f"{SVC}.list_files", side_effect=GrabError("camera gone")):
             with pytest.raises(GrabError, match="camera gone"):
-                grab.grab_latest(tmp_path)
+                grab_service.grab_latest(tmp_path)
 
 
 class TestPoll:
@@ -142,11 +147,11 @@ class TestPoll:
                 return [(1, "IMG_4001.JPG"), (2, "IMG_4002.JPG")]
             raise KeyboardInterrupt
 
-        with patch("camera_orchestrator.grab.unmount_gvfs"), \
-             patch("camera_orchestrator.grab.list_files", side_effect=fake_list), \
-             patch("camera_orchestrator.grab._download", return_value=tmp_path / "IMG_4002.JPG") as mock_dl, \
-             patch("camera_orchestrator.grab.time.sleep"):
-            grab.poll(tmp_path, interval=1.0)
+        with patch(f"{SVC}.unmount_gvfs"), \
+             patch(f"{SVC}.list_files", side_effect=fake_list), \
+             patch(f"{SVC}.download", return_value=tmp_path / "IMG_4002.JPG") as mock_dl, \
+             patch(f"{SVC}.time.sleep"):
+            grab_service.poll(tmp_path, interval=1.0)
 
         mock_dl.assert_called_once_with(2, "IMG_4002.JPG", tmp_path, False)
 
@@ -164,11 +169,11 @@ class TestPoll:
                 return [(1, "IMG_4001.JPG"), (2, "IMG_4002.JPG")]
             raise KeyboardInterrupt
 
-        with patch("camera_orchestrator.grab.unmount_gvfs"), \
-             patch("camera_orchestrator.grab.list_files", side_effect=fake_list), \
-             patch("camera_orchestrator.grab._download", return_value=tmp_path / "IMG_4002.JPG") as mock_dl, \
-             patch("camera_orchestrator.grab.time.sleep"):
-            grab.poll(tmp_path, interval=1.0)
+        with patch(f"{SVC}.unmount_gvfs"), \
+             patch(f"{SVC}.list_files", side_effect=fake_list), \
+             patch(f"{SVC}.download", return_value=tmp_path / "IMG_4002.JPG") as mock_dl, \
+             patch(f"{SVC}.time.sleep"):
+            grab_service.poll(tmp_path, interval=1.0)
 
         mock_dl.assert_called_once_with(2, "IMG_4002.JPG", tmp_path, False)
 
@@ -184,10 +189,10 @@ class TestPoll:
                 return [(1, "IMG_4001.JPG")]
             raise KeyboardInterrupt
 
-        with patch("camera_orchestrator.grab.unmount_gvfs"), \
-             patch("camera_orchestrator.grab.list_files", side_effect=fake_list), \
-             patch("camera_orchestrator.grab._download", return_value=tmp_path / "IMG_4001.JPG") as mock_dl, \
-             patch("camera_orchestrator.grab.time.sleep"):
-            grab.poll(tmp_path, interval=1.0)
+        with patch(f"{SVC}.unmount_gvfs"), \
+             patch(f"{SVC}.list_files", side_effect=fake_list), \
+             patch(f"{SVC}.download", return_value=tmp_path / "IMG_4001.JPG") as mock_dl, \
+             patch(f"{SVC}.time.sleep"):
+            grab_service.poll(tmp_path, interval=1.0)
 
         mock_dl.assert_called_once_with(1, "IMG_4001.JPG", tmp_path, False)
