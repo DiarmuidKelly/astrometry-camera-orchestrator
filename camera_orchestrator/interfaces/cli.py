@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 from camera_orchestrator.application.grab_service import grab_latest, poll
@@ -17,14 +18,14 @@ from camera_orchestrator.composition import (
     build_align_service,
     build_capture_service,
     build_repository,
-    build_session_service,
+    build_sequence_service,
     build_solver,
 )
 from camera_orchestrator.config import Config
 from camera_orchestrator.domain.errors import CameraError, GrabError
 from camera_orchestrator.domain.models.align import AlignRequest
 from camera_orchestrator.domain.models.camera import CameraStatus, CaptureRequest
-from camera_orchestrator.domain.models.session import SessionRequest
+from camera_orchestrator.domain.models.session import SequenceRequest
 from camera_orchestrator.log import get_logger
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".cr2"}
@@ -157,16 +158,34 @@ def cmd_grab(args: argparse.Namespace, cfg: Config) -> None:
         sys.exit(1)
 
 
+def _resolve_session(args: argparse.Namespace, cfg: Config) -> tuple[str, str | None]:
+    """Map --name + --out/config into (out_dir, session_dir).
+
+    Named: session_dir = <root>/<YYYYMMDD>-<name>, created on write, and out_dir
+    points at it. Unnamed (loose): session_dir is None and out_dir is the parent
+    root. Date-prefixed so align and sequence with the same name resolve the same
+    folder within a day.
+    """
+    root = args.out or cfg.grab.out_dir
+    name = getattr(args, "name", None)
+    if not name:
+        return root, None
+    session_dir = str(Path(root) / f"{date.today():%Y%m%d}-{name}")
+    return session_dir, session_dir
+
+
 def cmd_align(args: argparse.Namespace, cfg: Config) -> None:
+    out_dir, session_dir = _resolve_session(args, cfg)
     request = AlignRequest(
-        out_dir=args.out or cfg.grab.out_dir,
+        out_dir=out_dir,
         iso=args.iso,
         shutter=args.shutter,
         aperture=args.aperture,
         bulb_seconds=args.bulb,
     )
     try:
-        result = build_align_service(cfg).align(request)
+        result = build_align_service(cfg).align(
+            request, session_dir=session_dir, name=args.name, force=args.force)
     except CameraError as exc:
         log.error(str(exc))
         sys.exit(1)
@@ -179,14 +198,16 @@ def cmd_align(args: argparse.Namespace, cfg: Config) -> None:
             "dec": round(result.center_dec_deg, 4),
             "scale": round(result.scale_arcsec_per_px, 2),
             "annotated": result.annotated_path,
+            "session": session_dir,
         })
     else:
         log.warning("No solution", extra={"frame": result.frame_path})
 
 
-def cmd_session(args: argparse.Namespace, cfg: Config) -> None:
-    request = SessionRequest(
-        out_dir=args.out or cfg.grab.out_dir,
+def cmd_sequence(args: argparse.Namespace, cfg: Config) -> None:
+    out_dir, session_dir = _resolve_session(args, cfg)
+    request = SequenceRequest(
+        out_dir=out_dir,
         iso=args.iso,
         shutter=args.shutter,
         bulb_seconds=args.bulb,
@@ -204,13 +225,16 @@ def cmd_session(args: argparse.Namespace, cfg: Config) -> None:
             input(f"Ready for {kind} frames (lens uncovered)? Press Enter…")
 
     try:
-        result = build_session_service().run(request, before_phase=before_phase)
+        manifest = build_sequence_service().run(
+            request, session_dir=session_dir, before_phase=before_phase)
     except CameraError as exc:
         log.error(str(exc))
         sys.exit(1)
 
-    log.info("Session complete", extra={
-        "counts": result.counts, "downloaded": len(result.frames),
+    log.info("Sequence complete", extra={
+        "counts": {p.kind: p.count for p in manifest.phases},
+        "session": session_dir,
+        "manifest": str(Path(session_dir) / "session.json") if session_dir else None,
     })
 
 
@@ -254,25 +278,33 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("--status", action="store_true", help="Print camera status and exit")
 
     al = sub.add_parser("align", help="Capture one frame and solve it to check pointing")
-    al.add_argument("--out", default=None, help="Output directory (default: grab.out_dir from config)")
+    al.add_argument("--out", default=None, help="Parent output directory (default: grab.out_dir from config)")
+    al.add_argument("--name", default=None,
+                    help="Session label. Records the solved target into <out>/<date>-<name>/session.json. "
+                         "Omit for a loose, unrecorded pointing check in the parent.")
+    al.add_argument("--force", action="store_true",
+                    help="Overwrite the target of a session that already has sequenced frames")
     al.add_argument("--iso", default=None, help="ISO setting, e.g. 800")
     al.add_argument("--shutter", default=None, help="Shutter speed, e.g. 2 or 1/60 (ignored with --bulb)")
     al.add_argument("--aperture", default=None, help="Aperture f-number, e.g. 4")
     al.add_argument("--bulb", metavar="SECONDS", type=float, default=None,
                     help="Bulb exposure length in seconds (overrides --shutter)")
 
-    ses = sub.add_parser("session", help="Run an imaging session: lights + darks + bias")
-    ses.add_argument("--out", default=None, help="Output directory (default: grab.out_dir from config)")
-    ses.add_argument("--iso", default=None, help="ISO for lights and darks, e.g. 800")
-    ses.add_argument("--shutter", default=None, help="Shutter for lights and darks (bias uses fastest)")
-    ses.add_argument("--aperture", default=None, help="Aperture f-number, e.g. 4")
-    ses.add_argument("--bulb", metavar="SECONDS", type=float, default=None,
+    seq = sub.add_parser("sequence", help="Fire an imaging sequence: lights + darks + bias")
+    seq.add_argument("--out", default=None, help="Parent output directory (default: grab.out_dir from config)")
+    seq.add_argument("--name", default=None,
+                     help="Session label. Records phases into <out>/<date>-<name>/session.json. "
+                          "Omit for a loose, unrecorded run in the parent.")
+    seq.add_argument("--iso", default=None, help="ISO for lights and darks, e.g. 800")
+    seq.add_argument("--shutter", default=None, help="Shutter for lights and darks (bias uses fastest)")
+    seq.add_argument("--aperture", default=None, help="Aperture f-number, e.g. 4")
+    seq.add_argument("--bulb", metavar="SECONDS", type=float, default=None,
                      help="Bulb exposure for lights and darks (overrides --shutter)")
-    ses.add_argument("--lights", type=int, default=0, help="Number of light frames")
-    ses.add_argument("--darks", type=int, default=0, help="Number of dark frames (lens capped)")
-    ses.add_argument("--bias", type=int, default=0, help="Number of bias frames (fastest shutter, lens capped)")
-    ses.add_argument("--download", action="store_true",
-                     help="Transfer frames over USB to --out (default: shoot to the card only)")
+    seq.add_argument("--lights", type=int, default=0, help="Number of light frames")
+    seq.add_argument("--darks", type=int, default=0, help="Number of dark frames (lens capped)")
+    seq.add_argument("--bias", type=int, default=0, help="Number of bias frames (fastest shutter, lens capped)")
+    seq.add_argument("--download", action="store_true",
+                     help="Transfer frames over USB to the session folder (default: shoot to the card only)")
 
     return parser
 
@@ -292,8 +324,8 @@ def main() -> None:
         cmd_capture(args, cfg)
     elif args.command == "align":
         cmd_align(args, cfg)
-    elif args.command == "session":
-        cmd_session(args, cfg)
+    elif args.command == "sequence":
+        cmd_sequence(args, cfg)
     elif args.command == "batch":
         if args.mode:
             cfg.solver.mode = args.mode

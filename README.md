@@ -10,7 +10,7 @@ Python tool for plate-solving astrophotography frames using a dockerised [astrom
 - Uses scale hints derived from EXIF focal length + sensor geometry to speed up solving
 - Tethered capture from a Canon DSLR (5D Mark II) via python-gphoto2 — set ISO/shutter/aperture, single or bulb exposures, sequences to card or downloaded (JPEG)
 - `align` — shoot one frame, solve it, and report the true centre RA/Dec + an annotated preview to check pointing
-- `session` — a multi-phase imaging run (lights, darks, bias) with lens-cap prompts for the calibration phases
+- `sequence` — a multi-phase imaging run (lights, darks, bias) recorded into a per-session `session.json` manifest, with lens-cap prompts for the calibration phases
 - Grabs the latest image from a connected Canon camera via gphoto2 (one-shot or polled)
 
 ## Requirements
@@ -121,38 +121,48 @@ Notes:
 - Bodies that lock the shutter in a PTP session (e.g. Canon M50 II) are grab-only
   (`can_capture` is False); use `grab` for those.
 
-### Align — check pointing
+### Sessions: `align` + `sequence`
 
-Shoot one frame, plate-solve it, and report where the camera is actually pointing.
-Only the JPEG is pulled to disk (a RAW+JPEG body leaves the RAW on the card); the
-solved frame gets a `<stem>_solved.png` annotated overlay next to it.
+A **session** is a folder (`<out>/<YYYYMMDD>-<name>/`) that owns a `session.json`
+manifest. Two verbs write into it: `align` records the solved target, `sequence`
+fires the phases and records what they produced. Pass `--name` to record into a
+session; omit it for a loose, unrecorded run in the parent directory.
+
+**`align` — check pointing.** Shoot one frame, plate-solve it, and report where
+the camera is actually pointing. Only the JPEG is pulled to disk (a RAW+JPEG body
+leaves the RAW on the card); the solved frame gets a `<stem>_solved.png` overlay.
 
 ```bash
-python main.py align --iso 800 --shutter 1/60           # frame + solve, log centre RA/Dec
-python main.py align --iso 800 --shutter 1/60 --out ~/align
+python main.py align --iso 800 --shutter 1/60                 # loose check, nothing recorded
+python main.py align --iso 800 --shutter 1/60 --name orion    # records the target into orion's session
 ```
 
-Use it to confirm framing before starting a session; re-run after nudging the mount.
+Re-run freely to refine framing — each align overwrites the session's target.
+Once the session has sequenced frames the target **locks**; a later `align --name
+orion` refuses unless you pass `--force` (so you can't rewrite the target of a run
+that's already in the can).
 
-### Session — a full imaging run
-
-Run lights, darks, and bias in one command. Each phase with a count of 0 is
-skipped, so you can shoot lights-only per target and calibration-only once a night.
-Bias frames ignore `--shutter` and force the fastest speed (1/4000); darks inherit
-the light exposure. Calibration phases prompt you to cap the lens first.
+**`sequence` — a full imaging run.** Fire lights, darks, and bias. Each phase with
+a count of 0 is skipped, so you can shoot lights-only per target and
+calibration-only once a night. Frames shoot RAW; bias ignores `--shutter` and
+forces the fastest speed (1/4000); darks inherit the light exposure. Calibration
+phases prompt you to cap the lens first. Card-only by default — the frames' card
+filenames are still recorded in the manifest (best-effort: the camera is
+reconnected and its card polled until the frames appear).
 
 ```bash
-# One target: 60×2s lights (card-only, fast cadence)
-python main.py session --iso 800 --shutter 2 --lights 60
+# One target: 60×2s lights, recorded into orion's session
+python main.py sequence --iso 800 --shutter 2 --lights 60 --name orion
 
 # Calibration once per night — matched to the lights' ISO + exposure
-python main.py session --iso 800 --shutter 2 --darks 20 --bias 20
+python main.py sequence --iso 800 --shutter 2 --darks 20 --bias 20 --name cal
 ```
 
 Typical multi-target night: shoot calibration **once** (darks + bias at your
-working ISO/exposure), then per object run `align` to frame followed by a
-lights-only `session`. The same darks/bias masters apply to every target that
-shares that ISO and exposure.
+working ISO/exposure), then per object `align --name <obj>` to frame and record
+the target, followed by a lights-only `sequence --name <obj>`. The same darks/bias
+masters apply to every target that shares that ISO and exposure, and each session
+folder carries a `session.json` describing exactly what it holds.
 
 ## Config
 
@@ -216,9 +226,9 @@ make test-integration
 
 Batch solving works and has been tested against JPEG and CR2 files. Tethered
 capture (single, bulb, and sequences; card-only or downloaded), `align`, and
-`session` are validated on the Canon 5D Mark II. Camera grab (one-shot and polled)
-works with the Canon M50 II, which is grab-only (it locks the shutter in a PTP
-session).
+`sequence` are validated on the Canon 5D Mark II. Camera grab (one-shot and
+polled) works with the Canon M50 II, which is grab-only (it locks the shutter in a
+PTP session).
 
 ## License
 

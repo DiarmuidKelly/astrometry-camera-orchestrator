@@ -82,4 +82,5 @@ class CaptureResult(BaseModel):
     status: CameraStatus = Field(description="Camera status read at the start of the call.")
     frames_captured: int = Field(default=0, description="Number of frames triggered.")
     frames: list[str] = Field(default_factory=list, description="Local paths of downloaded files (empty when download is False).")
+    card_frames: list[str] = Field(default_factory=list, description="Camera-side filenames of frames left on the card, discovered via a list-files diff when record_files was requested on a card-only run. Empty otherwise.")
     download: bool = Field(default=True, description="Whether frames were transferred to the host.")

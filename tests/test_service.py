@@ -26,6 +26,12 @@ class MockCamera(Camera):
         self.bulbs: list[float] = []
         self.downloads: list[CameraFile] = []
         self.flushes = 0
+        self._shot = 0
+        # Models the camera's event queue: each shot emits its files here; they
+        # persist until wait_for_new_files drains them or flush_events discards
+        # them (as on the real hardware). `card` is the cumulative on-card listing.
+        self.pending: list[CameraFile] = []
+        self.card: list[CameraFile] = []
         # Names of atomic ops in call order — lets tests assert flush precedes triggers.
         self.calls: list[str] = []
 
@@ -46,20 +52,35 @@ class MockCamera(Camera):
     def trigger(self) -> None:
         self.triggers += 1
         self.calls.append("trigger")
+        self._emit()
 
     def bulb(self, seconds: float) -> None:
         self.bulbs.append(seconds)
         self.calls.append("bulb")
+        self._emit()
+
+    def _emit(self) -> None:
+        """One shot produces its configured files; later shots get unique names."""
+        shot, self._shot = self._shot, self._shot + 1
+        produced = []
+        for f in self._produces:
+            stem, dot, ext = f.name.rpartition(".")
+            name = f.name if shot == 0 else (f"{stem}_{shot}.{ext}" if dot else f"{f.name}_{shot}")
+            produced.append(CameraFile(f.folder, name))
+        self.pending.extend(produced)
+        self.card.extend(produced)
 
     def flush_events(self, timeout_ms=None) -> None:
         self.flushes += 1
         self.calls.append("flush")
+        self.pending.clear()
 
     def wait_for_new_files(self, timeout_ms=None) -> list[CameraFile]:
-        return list(self._produces)
+        drained, self.pending = self.pending, []
+        return drained
 
     def list_files(self) -> list[CameraFile]:
-        return list(self._produces)
+        return list(self.card)
 
     def download(self, ref: CameraFile, out_dir: Path) -> Path:
         self.downloads.append(ref)
@@ -123,6 +144,22 @@ def test_card_only_does_not_flush():
     cam = MockCamera()
     _service(cam).capture_to_card(_req(count=2))
     assert cam.flushes == 0                        # fast path untouched
+
+
+def test_record_files_lists_new_card_names():
+    cam = MockCamera(produces=[CameraFile("/store", "IMG.CR2")])
+    cam.card.append(CameraFile("/store", "OLD.CR2"))         # pre-existing on card
+    result = _service(cam).capture_to_card(_req(count=3), record_files=True)
+    assert result.card_frames == ["IMG.CR2", "IMG_1.CR2", "IMG_2.CR2"]
+    assert "OLD.CR2" not in result.card_frames               # diff excludes what was there
+    assert cam.flushes == 0                                  # card-only: no event flush
+
+
+def test_card_only_without_record_files_has_no_card_frames():
+    cam = MockCamera()
+    result = _service(cam).capture_to_card(_req(count=2))    # record_files defaults False
+    assert result.card_frames == []
+    assert cam.flushes == 0                                  # fast path untouched
 
 
 def test_capture_to_card_no_download():

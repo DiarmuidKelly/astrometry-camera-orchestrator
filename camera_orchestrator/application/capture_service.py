@@ -11,6 +11,7 @@ an API maps to an HTTP status).
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -61,10 +62,20 @@ class CaptureService:
             return camera.status()
 
     def capture_to_card(
-        self, request: CaptureRequest, on_frame: FrameCallback | None = None
+        self,
+        request: CaptureRequest,
+        on_frame: FrameCallback | None = None,
+        record_files: bool = False,
     ) -> CaptureResult:
-        """Fire a sequence to the card only — no USB transfer (faster cadence)."""
-        return self._run(request, download=False, on_frame=on_frame)
+        """Fire a sequence to the card only — no USB transfer (faster cadence).
+
+        record_files: record the camera-side filenames this run produced in
+        CaptureResult.card_frames, by diffing a card listing taken before firing
+        against one taken from a fresh session afterwards (a reconnect is needed
+        for the writes to appear). Lets a session log which card files it
+        produced. Off by default so plain capture is unaffected.
+        """
+        return self._run(request, download=False, on_frame=on_frame, record_files=record_files)
 
     def capture_and_download(
         self, request: CaptureRequest, on_frame: FrameCallback | None = None
@@ -80,7 +91,11 @@ class CaptureService:
         *,
         download: bool,
         on_frame: FrameCallback | None = None,
+        record_files: bool = False,
     ) -> CaptureResult:
+        record_card = record_files and not download
+        before_names: set[str] = set()
+
         with self._camera_factory() as camera:
             status = camera.status()
             if not camera.can_capture:
@@ -93,6 +108,11 @@ class CaptureService:
                 # Discard any backlog (e.g. from a prior card-only run) so
                 # wait_for_new_files only sees the shots we fire below.
                 camera.flush_events()
+            if record_card:
+                # Snapshot the card now — this freshly-opened session lists it
+                # accurately. After firing we reopen for a fresh listing (below),
+                # because the card writes aren't visible within this session.
+                before_names = {f.name for f in camera.list_files()}
 
             out_dir = Path(request.out_dir)
             frames: list[Path] = []
@@ -117,12 +137,55 @@ class CaptureService:
                 if on_frame is not None:
                     on_frame(i, request.count, this_frame)
 
-            return CaptureResult(
-                status=status,
-                frames_captured=request.count,
-                frames=[str(p) for p in frames],
-                download=download,
-            )
+        # Card-only filename capture. Card writes emit FILE_ADDED events, but the
+        # camera drops/coalesces them under rapid fire — unreliable for counting.
+        # A directory listing is authoritative, but libgphoto2 caches it within a
+        # session (so writes only appear after a reconnect) and the card's write
+        # buffer flushes with a lag. So reopen fresh sessions and poll until the
+        # expected number of new files has appeared.
+        card_frames: list[str] = []
+        if record_card:
+            card_frames = self._await_new_card_files(before_names, request.count)
+
+        return CaptureResult(
+            status=status,
+            frames_captured=request.count,
+            frames=[str(p) for p in frames],
+            card_frames=card_frames,
+            download=download,
+        )
+
+    def _await_new_card_files(
+        self,
+        before_names: set[str],
+        expected: int,
+        attempts: int = 15,
+        poll_s: float = 2.0,
+    ) -> list[str]:
+        """Poll fresh sessions until the card shows all `expected` new files.
+
+        A reconnect is required for card writes to appear (the in-session listing
+        is cached), and the write buffer flushes with a lag — so we reopen and
+        re-list until the expected count is present, or attempts run out
+        (returning best-effort so the run is still recorded).
+        """
+        new: list[str] = []
+        for attempt in range(attempts):
+            try:
+                with self._camera_factory() as lister:
+                    new = sorted(
+                        f.name for f in lister.list_files() if f.name not in before_names
+                    )
+            except CameraError:
+                pass  # camera briefly unavailable after close — retry
+            else:
+                if len(new) >= expected:
+                    return new
+            if attempt < attempts - 1:
+                time.sleep(poll_s)
+        log.warning("Card listing incomplete — some filenames not recorded",
+                    extra={"expected": expected, "found": len(new)})
+        return new
 
     @staticmethod
     def _shoot(camera: Camera, bulb_seconds: float | None) -> None:

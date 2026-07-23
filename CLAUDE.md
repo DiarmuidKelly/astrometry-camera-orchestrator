@@ -77,6 +77,18 @@ make fmt     # ruff format
 
 - **Capture default is card-only** (`--download` opts into USB transfer). Card-only
   is faster for bulk sub sequences; download drains events + pulls RAW+JPEG.
+- **Card-only filenames come from a reconnect + poll, NOT events.** libgphoto2
+  caches the in-session directory listing (writes appear only after a reconnect),
+  and the camera drops/coalesces `FILE_ADDED` events under rapid card-only fire —
+  so neither an in-session `list_files` nor an event drain is reliable. To record
+  which card files a card-only run produced, snapshot `list_files()` before firing
+  then reopen fresh sessions and poll until the expected count appears
+  (`CaptureService._await_new_card_files`). The card is the source of truth. Don't
+  "simplify" this back to events. The download path *does* use events reliably
+  (per-frame wait + download).
+- **Each capture verb sets the image format it needs** (`align` → jpeg, `sequence`
+  → raw); nothing is restored, so a command never depends on what the last one
+  left the camera in.
 - **gvfs must be released** before python-gphoto2 can claim the device (the driver
   does this on connect).
 - **`can_capture`** is False for bodies that lock the shutter in a PTP session
