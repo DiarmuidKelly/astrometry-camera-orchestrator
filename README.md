@@ -29,6 +29,29 @@ uv sync                              # create the env + install deps
 cp config.example.yaml config.yaml   # edit paths and optics
 ```
 
+## Before a session — prepare your config
+
+`config.yaml` is the per-session control surface: `align` and `batch` read the
+optics and search hint from it at solve time. Set these before you run anything —
+a wrong value here doesn't error, it just makes solves slow or fail.
+
+1. **`solver.index_dir`** — path to your astrometry index files. Nothing solves without it.
+2. **`optics.sensor_width_mm`** — must match the body you're shooting. This is a
+   single global value, so **change it when you switch cameras**:
+   - `35.8` — Canon **5D Mark II** (full-frame)
+   - `22.3` — Canon **M50 II** (APS-C)
+
+   With `focal_mm: null`, the plate scale is derived from EXIF focal length × this
+   width; the wrong sensor width skews the scale hint (~1.6× between the two bodies)
+   and the solver searches the wrong scale.
+3. **`search.ra_deg` / `dec_deg` / `radius_deg`** — centre on tonight's region so
+   solves are fast. Widen `radius_deg`, or null the RA/Dec, for a blind solve of a
+   target well outside that circle.
+4. **`location.lat` / `lon`** — observer coordinates recorded in the `_solved.json` sidecars.
+
+(A future UI/API will pass the search region per-request instead of via config;
+until then, edit it here per session.)
+
 ## Usage
 
 Run the CLI with uv (no manual venv activation needed):
