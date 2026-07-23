@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from camera_orchestrator.adapters.camera.gphoto import GphotoCamera
 from camera_orchestrator.adapters.solvers.docker import DockerSolver
+from camera_orchestrator.adapters.storage.session_manifest import SidecarSessionRepository
 from camera_orchestrator.adapters.storage.sidecar import SidecarSolveRepository
 from camera_orchestrator.application.align_service import AlignService
 from camera_orchestrator.application.capture_service import CaptureService
-from camera_orchestrator.application.session_service import SessionService
+from camera_orchestrator.application.sequence_service import SequenceService
 from camera_orchestrator.config import Config
 from camera_orchestrator.domain.ports.camera import Camera
+from camera_orchestrator.domain.ports.session_manifest import SessionManifestRepository
 from camera_orchestrator.domain.ports.solver import Solver
 from camera_orchestrator.domain.ports.storage import SolveRecordRepository
 
@@ -42,11 +44,17 @@ def build_repository() -> SolveRecordRepository:
     return SidecarSolveRepository()
 
 
+def build_session_repository() -> SessionManifestRepository:
+    """Build the session-manifest persistence backend (filesystem sidecar today)."""
+    return SidecarSessionRepository()
+
+
 def build_align_service(cfg: Config) -> AlignService:
-    """AlignService wired with the capture service + solver factory."""
-    return AlignService(build_capture_service(), lambda: build_solver(cfg), cfg)
+    """AlignService wired with the capture service, solver factory, and manifest repo."""
+    return AlignService(build_capture_service(), lambda: build_solver(cfg), cfg,
+                        build_session_repository())
 
 
-def build_session_service() -> SessionService:
-    """SessionService wired with the capture service."""
-    return SessionService(build_capture_service())
+def build_sequence_service() -> SequenceService:
+    """SequenceService wired with the capture service and manifest repo."""
+    return SequenceService(build_capture_service(), build_session_repository())
