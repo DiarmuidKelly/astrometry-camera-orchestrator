@@ -54,24 +54,46 @@ until then, edit it here per session.)
 
 ## Usage
 
-Run the CLI with uv (no manual venv activation needed):
+Every command runs the same way — through uv, no venv activation needed:
 
 ```bash
-uv run camera-orchestrator <command> ...   # installed console script
-uv run python main.py <command> ...        # equivalent
+uv run camera-orchestrator <command> [options]
+uv run camera-orchestrator --help          # list all commands
 ```
 
-The examples below use `python main.py …`; prefix them with `uv run`, or run
-`uv sync` once and activate `.venv` (`source .venv/bin/activate`).
+That's the only invocation used below.
+
+### Quick start — a night's imaging
+
+Per target, two steps: **align** to check/record pointing, then **sequence** to
+shoot. `--name` groups both into one session folder (`<out>/<date>-<name>/`).
+
+```bash
+# 1. Aim, then check where you're pointing (writes an annotated preview + the target)
+uv run camera-orchestrator align --name orion --iso 800 --shutter 1/60
+
+# 2. Shoot the run: lights + calibration (bias auto-uses the fastest shutter)
+uv run camera-orchestrator sequence --name orion --iso 800 --shutter 2 \
+    --lights 60 --darks 20 --bias 20
+
+# Next target — new name, repeat
+uv run camera-orchestrator align    --name m31 --iso 800 --shutter 1/60
+uv run camera-orchestrator sequence --name m31 --iso 800 --shutter 2 --lights 60
+```
+
+Set the lens to **manual focus** first. Frames go to the card by default; each
+session folder gets a `session.json` recording the target, timings, and which
+files belong to which phase. The other commands below (`batch`, `grab`,
+`capture`) are lower-level tools; align + sequence are the nightly workflow.
 
 ### Batch solve
 
 ```bash
-python main.py batch /path/to/images --annotate
-python main.py batch /path/to/images --annotate --mode fast   # faster, lower accuracy
+uv run camera-orchestrator batch /path/to/images --annotate
+uv run camera-orchestrator batch /path/to/images --annotate --mode fast   # faster, lower accuracy
 ```
 
-Full options via `python main.py batch --help`:
+Full options via `uv run camera-orchestrator batch --help`:
 
 ```
 positional arguments:
@@ -90,12 +112,12 @@ options:
 gvfs is unmounted automatically before listing files.
 
 ```bash
-python main.py grab                   # download latest image to grab.out_dir from config
-python main.py grab --poll 5          # poll every 5s, download new images as they appear
-python main.py grab --out ~/Pictures  # override output directory
+uv run camera-orchestrator grab                   # download latest image to grab.out_dir from config
+uv run camera-orchestrator grab --poll 5          # poll every 5s, download new images as they appear
+uv run camera-orchestrator grab --out ~/Pictures  # override output directory
 ```
 
-Full options via `python main.py grab --help`:
+Full options via `uv run camera-orchestrator grab --help`:
 
 ```
 options:
@@ -110,10 +132,10 @@ Drive a connected Canon DSLR (validated on the 5D Mark II) over USB. Capture is
 card-only by default (fast for bulk sequences); `--download` transfers to `--out`.
 
 ```bash
-python main.py capture --status
-python main.py capture --iso 800 --shutter 2 --count 30                 # 30 subs to the card
-python main.py capture --iso 800 --shutter 2 --count 30 --download      # download each frame
-python main.py capture --bulb 30 --count 20 --download                  # 30s bulb subs
+uv run camera-orchestrator capture --status
+uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30                 # 30 subs to the card
+uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30 --download      # download each frame
+uv run camera-orchestrator capture --bulb 30 --count 20 --download                  # 30s bulb subs
 ```
 
 Notes:
@@ -133,8 +155,8 @@ the camera is actually pointing. Only the JPEG is pulled to disk (a RAW+JPEG bod
 leaves the RAW on the card); the solved frame gets a `<stem>_solved.png` overlay.
 
 ```bash
-python main.py align --iso 800 --shutter 1/60                 # loose check, nothing recorded
-python main.py align --iso 800 --shutter 1/60 --name orion    # records the target into orion's session
+uv run camera-orchestrator align --iso 800 --shutter 1/60                 # loose check, nothing recorded
+uv run camera-orchestrator align --iso 800 --shutter 1/60 --name orion    # records the target into orion's session
 ```
 
 Re-run freely to refine framing — each align overwrites the session's target.
@@ -152,10 +174,10 @@ reconnected and its card polled until the frames appear).
 
 ```bash
 # One target: 60×2s lights, recorded into orion's session
-python main.py sequence --iso 800 --shutter 2 --lights 60 --name orion
+uv run camera-orchestrator sequence --iso 800 --shutter 2 --lights 60 --name orion
 
 # Calibration once per night — matched to the lights' ISO + exposure
-python main.py sequence --iso 800 --shutter 2 --darks 20 --bias 20 --name cal
+uv run camera-orchestrator sequence --iso 800 --shutter 2 --darks 20 --bias 20 --name cal
 ```
 
 Typical multi-target night: shoot calibration **once** (darks + bias at your
@@ -182,7 +204,7 @@ grab:
 | `LOG_FORMAT` | `text` `json` | Override log format (json = one JSON object per line) |
 
 ```bash
-LOG_LEVEL=DEBUG LOG_FORMAT=json python main.py batch /path/to/images
+LOG_LEVEL=DEBUG LOG_FORMAT=json uv run camera-orchestrator batch /path/to/images
 ```
 
 ## Architecture
