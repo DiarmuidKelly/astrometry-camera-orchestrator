@@ -4,11 +4,13 @@ Python tool for plate-solving astrophotography frames using a dockerised [astrom
 
 ## What it does
 
-- Batch plate-solves a folder of JPEG images (CR3 decode not yet supported)
+- Batch plate-solves a folder of JPEG or Canon CR2 RAW images (CR3 not yet supported)
 - Writes per-image `_solved.json` sidecars with EXIF, astrometric solution, and observer metadata
 - Produces NGC-annotated overlay images
 - Uses scale hints derived from EXIF focal length + sensor geometry to speed up solving
 - Tethered capture from a Canon DSLR (5D Mark II) via python-gphoto2 — set ISO/shutter/aperture, single or bulb exposures, sequences to card or downloaded (JPEG)
+- `align` — shoot one frame, solve it, and report the true centre RA/Dec + an annotated preview to check pointing
+- `session` — a multi-phase imaging run (lights, darks, bias) with lens-cap prompts for the calibration phases
 - Grabs the latest image from a connected Canon camera via gphoto2 (one-shot or polled)
 
 ## Requirements
@@ -96,6 +98,39 @@ Notes:
 - Bodies that lock the shutter in a PTP session (e.g. Canon M50 II) are grab-only
   (`can_capture` is False); use `grab` for those.
 
+### Align — check pointing
+
+Shoot one frame, plate-solve it, and report where the camera is actually pointing.
+Only the JPEG is pulled to disk (a RAW+JPEG body leaves the RAW on the card); the
+solved frame gets a `<stem>_solved.png` annotated overlay next to it.
+
+```bash
+python main.py align --iso 800 --shutter 1/60           # frame + solve, log centre RA/Dec
+python main.py align --iso 800 --shutter 1/60 --out ~/align
+```
+
+Use it to confirm framing before starting a session; re-run after nudging the mount.
+
+### Session — a full imaging run
+
+Run lights, darks, and bias in one command. Each phase with a count of 0 is
+skipped, so you can shoot lights-only per target and calibration-only once a night.
+Bias frames ignore `--shutter` and force the fastest speed (1/4000); darks inherit
+the light exposure. Calibration phases prompt you to cap the lens first.
+
+```bash
+# One target: 60×2s lights (card-only, fast cadence)
+python main.py session --iso 800 --shutter 2 --lights 60
+
+# Calibration once per night — matched to the lights' ISO + exposure
+python main.py session --iso 800 --shutter 2 --darks 20 --bias 20
+```
+
+Typical multi-target night: shoot calibration **once** (darks + bias at your
+working ISO/exposure), then per object run `align` to frame followed by a
+lights-only `session`. The same darks/bias masters apply to every target that
+shares that ISO and exposure.
+
 ## Config
 
 `config.yaml` holds static settings. The image folder (for batch) and output directory (for grab) are passed as CLI arguments or set in config.
@@ -156,10 +191,11 @@ make test-integration
 
 ## Status
 
-Batch solving works and has been tested against JPEG files. Tethered capture
-(single, bulb, and sequences; card-only or downloaded) is validated on the Canon
-5D Mark II. Camera grab (one-shot and polled) works with the Canon M50 II, which
-is grab-only (it locks the shutter in a PTP session).
+Batch solving works and has been tested against JPEG and CR2 files. Tethered
+capture (single, bulb, and sequences; card-only or downloaded), `align`, and
+`session` are validated on the Canon 5D Mark II. Camera grab (one-shot and polled)
+works with the Canon M50 II, which is grab-only (it locks the shutter in a PTP
+session).
 
 ## License
 
