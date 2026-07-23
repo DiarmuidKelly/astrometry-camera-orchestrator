@@ -1,8 +1,10 @@
 """Align service — capture one frame, solve it, report where it landed.
 
-Composes the existing CaptureService (grab a single frame) and the solver
-(solve_file) into a pointing check. Ephemeral: it writes an annotated preview
-next to the frame and returns the centre RA/Dec; it does not persist a record.
+Composes CaptureService (grab a single frame) and the solver (solve_file) into
+a pointing check. It requests select="jpeg", so with a RAW+JPEG camera only the
+JPEG is pulled down (fast) and the RAW stays on the card — the camera's format
+setting is left untouched. Ephemeral: writes an annotated preview next to the
+frame and returns the centre RA/Dec; it does not persist a record.
 """
 from __future__ import annotations
 
@@ -18,18 +20,6 @@ from camera_orchestrator.domain.models.camera import CaptureRequest
 from camera_orchestrator.domain.ports.solver import Solver
 
 SolverFactory = Callable[[], Solver]
-
-
-def _pick_frame(frames: list[Path]) -> Path:
-    """Prefer a JPEG (fast to solve); fall back to CR2, then anything."""
-    for ext in (".jpg", ".jpeg"):
-        for f in frames:
-            if f.suffix.lower() == ext:
-                return f
-    for f in frames:
-        if f.suffix.lower() == ".cr2":
-            return f
-    return frames[0]
 
 
 class AlignService:
@@ -49,12 +39,12 @@ class AlignService:
             bulb_seconds=request.bulb_seconds,
             count=1,
             download=True,
+            select="jpeg",
         ))
-        frames = [Path(p) for p in cap.frames]
-        if not frames:
+        if not cap.frames:
             raise CameraError("align: no frame was downloaded")
 
-        frame = _pick_frame(frames)
+        frame = Path(cap.frames[0])
         annotate_out = str(Path(request.out_dir) / f"{frame.stem}_solved.png")
         job = solve_file(str(frame), self._solver_factory(), self._cfg, annotate_out=annotate_out)
 

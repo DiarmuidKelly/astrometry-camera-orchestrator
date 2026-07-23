@@ -16,6 +16,7 @@ from typing import Callable
 
 from camera_orchestrator.domain.errors import CameraError
 from camera_orchestrator.domain.models.camera import (
+    CameraFile,
     CameraStatus,
     CaptureRequest,
     CaptureResult,
@@ -30,6 +31,17 @@ CameraFactory = Callable[[], Camera]
 
 # Called after each frame: (index, total, downloaded_paths_this_frame).
 FrameCallback = Callable[[int, int, list[Path]], None]
+
+# Filename extensions for each `select` mode (a shot's files are named by the camera).
+_SELECT_EXTS = {"jpeg": (".jpg", ".jpeg"), "cr2": (".cr2",)}
+
+
+def _select_files(refs: list[CameraFile], mode: str) -> list[CameraFile]:
+    """Return the subset of a shot's files to download for the given select mode."""
+    if mode == "all":
+        return refs
+    exts = _SELECT_EXTS[mode]
+    return [r for r in refs if r.name.lower().endswith(exts)]
 
 
 class CaptureService:
@@ -77,6 +89,10 @@ class CaptureService:
                 )
             camera.apply(request.to_settings())
             camera.set_capture_target(to_card=not download)
+            if download:
+                # Discard any backlog (e.g. from a prior card-only run) so
+                # wait_for_new_files only sees the shots we fire below.
+                camera.flush_events()
 
             out_dir = Path(request.out_dir)
             frames: list[Path] = []
@@ -87,7 +103,13 @@ class CaptureService:
                     refs = camera.wait_for_new_files()
                     if not refs:
                         raise CameraError("shot fired but no file arrived before timeout")
-                    this_frame = [camera.download(ref, out_dir) for ref in refs]
+                    to_download = _select_files(refs, request.select)
+                    if not to_download:
+                        raise CameraError(
+                            f"select={request.select!r} matched none of the shot's files: "
+                            f"{[r.name for r in refs]}"
+                        )
+                    this_frame = [camera.download(ref, out_dir) for ref in to_download]
                     frames.extend(this_frame)
                 log.info("Frame captured",
                          extra={"kind": request.kind, "index": i, "total": request.count,

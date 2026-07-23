@@ -60,6 +60,7 @@ class CaptureRequest(BaseModel):
     count: int = Field(default=1, ge=1, description="Number of frames to capture.")
     kind: Literal["light", "dark", "bias"] = Field(default="light", description="Frame type label, for logging and downstream sorting.")
     download: bool = Field(default=False, description="Transfer each frame over USB (True) or shoot to the card only for faster cadence (False, the default).")
+    select: Literal["all", "jpeg", "cr2"] = Field(default="all", description="When download is True, which of the shot's files to pull down: 'all', only the 'jpeg', or only the 'cr2'. Ignored when download is False.")
 
     def to_settings(self) -> "CaptureSettings":
         """Build the camera-facing exposure settings for this request.

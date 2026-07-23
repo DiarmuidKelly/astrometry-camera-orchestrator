@@ -25,6 +25,9 @@ class MockCamera(Camera):
         self.triggers = 0
         self.bulbs: list[float] = []
         self.downloads: list[CameraFile] = []
+        self.flushes = 0
+        # Names of atomic ops in call order — lets tests assert flush precedes triggers.
+        self.calls: list[str] = []
 
     @property
     def can_capture(self) -> bool:
@@ -42,9 +45,15 @@ class MockCamera(Camera):
 
     def trigger(self) -> None:
         self.triggers += 1
+        self.calls.append("trigger")
 
     def bulb(self, seconds: float) -> None:
         self.bulbs.append(seconds)
+        self.calls.append("bulb")
+
+    def flush_events(self, timeout_ms=None) -> None:
+        self.flushes += 1
+        self.calls.append("flush")
 
     def wait_for_new_files(self, timeout_ms=None) -> list[CameraFile]:
         return list(self._produces)
@@ -74,6 +83,46 @@ def test_capture_and_download_frame_count():
     assert result.frames_captured == 3
     assert len(result.frames) == 3              # one file per frame
     assert result.download is True
+
+
+def test_select_all_downloads_every_file():
+    cam = MockCamera(produces=[CameraFile("/s", "x.CR2"), CameraFile("/s", "x.JPG")])
+    result = _service(cam).capture_and_download(_req(count=1))   # default select="all"
+    assert [r.name for r in cam.downloads] == ["x.CR2", "x.JPG"]
+    assert len(result.frames) == 2
+
+
+def test_select_jpeg_downloads_only_jpeg():
+    cam = MockCamera(produces=[CameraFile("/s", "x.CR2"), CameraFile("/s", "x.JPG")])
+    result = _service(cam).capture_and_download(_req(count=1, select="jpeg"))
+    assert [r.name for r in cam.downloads] == ["x.JPG"]
+    assert len(result.frames) == 1
+
+
+def test_select_cr2_downloads_only_cr2():
+    cam = MockCamera(produces=[CameraFile("/s", "x.CR2"), CameraFile("/s", "x.JPG")])
+    _service(cam).capture_and_download(_req(count=1, select="cr2"))
+    assert [r.name for r in cam.downloads] == ["x.CR2"]
+
+
+def test_select_no_match_raises():
+    cam = MockCamera(produces=[CameraFile("/s", "x.CR2")])   # no JPEG present
+    with pytest.raises(CameraError, match="matched none"):
+        _service(cam).capture_and_download(_req(count=1, select="jpeg"))
+
+
+def test_download_run_flushes_events_once_before_capturing():
+    cam = MockCamera()
+    _service(cam).capture_and_download(_req(count=3))
+    assert cam.flushes == 1                       # once for the run, not per frame
+    assert cam.calls[0] == "flush"                # before any trigger
+    assert cam.calls.count("trigger") == 3
+
+
+def test_card_only_does_not_flush():
+    cam = MockCamera()
+    _service(cam).capture_to_card(_req(count=2))
+    assert cam.flushes == 0                        # fast path untouched
 
 
 def test_capture_to_card_no_download():

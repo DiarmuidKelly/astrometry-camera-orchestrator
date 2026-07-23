@@ -160,6 +160,10 @@ class GphotoCamera(Camera):
 
     # -- atomic file operations -------------------------------------------
 
+    def flush_events(self, timeout_ms: int | None = None) -> None:
+        """A flush is just the query with its result discarded."""
+        self.wait_for_new_files(timeout_ms if timeout_ms is not None else _SETTLE_TIMEOUT_MS)
+
     def wait_for_new_files(self, timeout_ms: int | None = None) -> list[CameraFile]:
         """Return the camera-side files produced since the last trigger.
 
