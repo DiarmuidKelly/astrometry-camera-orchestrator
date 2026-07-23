@@ -87,7 +87,10 @@ class SequenceService:
                 files = result.card_frames
             phase_end = self._clock()
 
-            log.info("Sequence phase", extra={"kind": kind, "count": result.frames_captured})
+            # Name the files by where they live: on disk (downloaded) or on card.
+            where = "saved" if request.download else "on_card"
+            log.info("Sequence phase",
+                     extra={"kind": kind, "count": result.frames_captured, where: files})
             records.append(PhaseRecord(
                 kind=kind,
                 count=result.frames_captured,

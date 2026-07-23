@@ -131,9 +131,10 @@ class CaptureService:
                         )
                     this_frame = [camera.download(ref, out_dir) for ref in to_download]
                     frames.extend(this_frame)
+                # Progress only — per-frame we don't have a card filename (those
+                # are recovered after the phase), and downloads log "Saved" each.
                 log.info("Frame captured",
-                         extra={"kind": request.kind, "index": i, "total": request.count,
-                                "files": [p.name for p in this_frame]})
+                         extra={"kind": request.kind, "index": i, "total": request.count})
                 if on_frame is not None:
                     on_frame(i, request.count, this_frame)
 
