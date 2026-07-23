@@ -1,0 +1,57 @@
+"""Tests for AlignService — capture (MockCamera) + solve (patched solve_file)."""
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import patch
+
+from camera_orchestrator.application.align_service import AlignService
+from camera_orchestrator.application.capture_service import CaptureService
+from camera_orchestrator.config import Config
+from camera_orchestrator.domain.models.align import AlignRequest
+from camera_orchestrator.domain.models.camera import CameraFile
+from camera_orchestrator.domain.models.solve import SolveJob, SolveResult
+
+from tests.test_service import MockCamera  # reuse the atomic-ABC mock
+
+
+def _service(produces):
+    cam = MockCamera(produces=produces)
+    svc = AlignService(CaptureService(camera_factory=lambda: cam), lambda: object(), Config())
+    return svc, cam
+
+
+def _solved_job(path: str) -> SolveJob:
+    return SolveJob(
+        path=path,
+        result=SolveResult(
+            center_ra_deg=115.4, center_dec_deg=21.5,
+            scale_arcsec_per_px=3.96, width_px=60, height_px=40,
+            annotated_path=str(Path(path).with_name(f"{Path(path).stem}_solved.png")),
+        ),
+    )
+
+
+def test_align_downloads_only_jpeg_of_raw_jpeg_pair(tmp_path):
+    svc, cam = _service([CameraFile("/s", "IMG_2.CR2"), CameraFile("/s", "IMG_2.JPG")])
+    with patch("camera_orchestrator.application.align_service.solve_file",
+               side_effect=lambda path, solver, cfg, annotate_out=None: _solved_job(path)) as mock_solve:
+        result = svc.align(AlignRequest(out_dir=str(tmp_path), iso="800", shutter="1"))
+
+    # only the JPEG was pulled down — the RAW stays on the card
+    assert [r.name for r in cam.downloads] == ["IMG_2.JPG"]
+    assert mock_solve.call_args.args[0].endswith("IMG_2.JPG")
+    assert mock_solve.call_args.kwargs["annotate_out"].endswith("IMG_2_solved.png")
+    assert result.solved is True
+    assert result.center_ra_deg == 115.4
+    assert result.annotated_path.endswith("IMG_2_solved.png")
+
+
+def test_align_reports_no_solution(tmp_path):
+    svc, _ = _service([CameraFile("/s", "IMG_3.JPG")])
+    with patch("camera_orchestrator.application.align_service.solve_file",
+               side_effect=lambda path, solver, cfg, annotate_out=None: SolveJob(path=path)):
+        result = svc.align(AlignRequest(out_dir=str(tmp_path)))
+    assert result.solved is False
+    assert result.center_ra_deg is None
+    assert result.annotated_path is None
+    assert result.frame_path.endswith("IMG_3.JPG")

@@ -5,13 +5,36 @@ Hint assembly and solver logic live in camera_orchestrator.solvers.
 """
 from __future__ import annotations
 
+import os
+
 import cv2
+import numpy as np
+import rawpy
 
 from camera_orchestrator.adapters.exif import read_exif
 from camera_orchestrator.config import Config
 from camera_orchestrator.domain.models.solve import SolveHints, SolveJob
 from camera_orchestrator.domain.optics import scale_hint_from_optics
 from camera_orchestrator.domain.ports.solver import Solver
+
+# Camera raw formats we decode ourselves (solve-field can't read them directly,
+# so we hand the solver a decoded array and let it write a FITS).
+RAW_SUFFIXES = {".cr2"}
+
+
+def _load_frame(path: str) -> tuple[np.ndarray | None, str | None]:
+    """Return (BGR frame, source_path_for_solver).
+
+    For a JPEG/PNG the original file is handed straight to solve-field
+    (source_path = path, preserving colour). For a raw (CR2) we decode with
+    rawpy and return source_path = None, so the solver writes a FITS from the
+    array instead of trying (and failing) to read the raw file.
+    """
+    if os.path.splitext(path)[1].lower() in RAW_SUFFIXES:
+        with rawpy.imread(path) as raw:
+            rgb = raw.postprocess()
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), None
+    return cv2.imread(path, cv2.IMREAD_COLOR), path
 
 
 def build_hints(cfg: Config, exif_focal_mm: float | None, frame_width_px: int) -> SolveHints:
@@ -61,19 +84,22 @@ def solve_file(
     except Exception:
         pass
 
-    frame = cv2.imread(path, cv2.IMREAD_COLOR)
+    try:
+        frame, source_path = _load_frame(path)
+    except Exception as exc:
+        return SolveJob(path=path, exif=exif, error=f"could not decode {path}: {exc}")
     if frame is None:
         return SolveJob(
             path=path,
             exif=exif,
-            error="cv2.imread returned None — unsupported format or corrupt file",
+            error="could not decode image — unsupported format or corrupt file",
         )
 
     _, w = frame.shape[:2]
     hints = build_hints(cfg, exif.focal_mm if exif else None, w)
 
     try:
-        result = solver.solve(frame, hints, annotate_out=annotate_out, source_path=path)
+        result = solver.solve(frame, hints, annotate_out=annotate_out, source_path=source_path)
         return SolveJob(path=path, exif=exif, hints=hints, result=result)
     except Exception as exc:
         return SolveJob(path=path, exif=exif, hints=hints, error=str(exc))

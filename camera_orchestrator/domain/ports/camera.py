@@ -77,6 +77,15 @@ class Camera(ABC):
     # -- atomic file operations -------------------------------------------
 
     @abstractmethod
+    def flush_events(self, timeout_ms: int | None = None) -> None:
+        """Drain the event queue and discard the result.
+
+        A flush is just the same query as wait_for_new_files with the returned
+        files thrown away — it clears any backlog a prior card-only run left in
+        the camera's event queue so the next wait sees only fresh files.
+        """
+
+    @abstractmethod
     def wait_for_new_files(self, timeout_ms: int | None = None) -> list[CameraFile]:
         """Return the camera-side files produced since the last trigger.
 
