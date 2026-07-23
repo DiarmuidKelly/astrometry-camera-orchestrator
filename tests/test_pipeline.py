@@ -1,4 +1,7 @@
 from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
 
 from camera_orchestrator.config import Config
 from camera_orchestrator.domain.models import SolveResult
@@ -12,9 +15,24 @@ SAMPLE_IMAGE = str(Path(__file__).parent / "fixtures" / "IMG_4341.JPG")
 class MockSolver(Solver):
     def __init__(self, result: SolveResult | None = None):
         self._result = result
+        self.source_path = "__unset__"
 
     def solve(self, frame_bgr, hints, annotate_out=None, source_path=None):
+        self.source_path = source_path
         return self._result
+
+
+class _FakeRaw:
+    """Stand-in for a rawpy RawPy object (context manager + postprocess)."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def postprocess(self):
+        return np.zeros((40, 60, 3), dtype=np.uint8)  # RGB HxWx3
 
 
 def _cfg(**kwargs) -> Config:
@@ -80,3 +98,28 @@ def test_solve_file_corrupt_image(tmp_path):
     job = solve_file(str(bad), MockSolver(), cfg)
     assert job.solved is False
     assert job.error is not None
+
+
+def test_solve_file_jpeg_passes_source_path():
+    solver = MockSolver(result=SolveResult(
+        center_ra_deg=1.0, center_dec_deg=2.0, scale_arcsec_per_px=3.0,
+        width_px=6000, height_px=4000,
+    ))
+    solve_file(SAMPLE_IMAGE, solver, _cfg())
+    # JPEG: original file handed straight to solve-field.
+    assert solver.source_path == SAMPLE_IMAGE
+
+
+def test_solve_file_cr2_decodes_via_rawpy(tmp_path):
+    cr2 = tmp_path / "IMG_0001.CR2"
+    cr2.write_bytes(b"fake-raw")
+    solver = MockSolver(result=SolveResult(
+        center_ra_deg=1.0, center_dec_deg=2.0, scale_arcsec_per_px=3.0,
+        width_px=60, height_px=40,
+    ))
+    with patch("camera_orchestrator.application.solve_service.rawpy.imread",
+               return_value=_FakeRaw()):
+        job = solve_file(str(cr2), solver, _cfg())
+    assert job.solved is True
+    # CR2: decoded to an array, so source_path is None (solver writes a FITS).
+    assert solver.source_path is None

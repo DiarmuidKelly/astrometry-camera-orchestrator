@@ -14,16 +14,20 @@ from pathlib import Path
 from camera_orchestrator.application.grab_service import grab_latest, poll
 from camera_orchestrator.application.solve_service import solve_file
 from camera_orchestrator.composition import (
+    build_align_service,
     build_capture_service,
     build_repository,
+    build_session_service,
     build_solver,
 )
 from camera_orchestrator.config import Config
 from camera_orchestrator.domain.errors import CameraError, GrabError
+from camera_orchestrator.domain.models.align import AlignRequest
 from camera_orchestrator.domain.models.camera import CameraStatus, CaptureRequest
+from camera_orchestrator.domain.models.session import SessionRequest
 from camera_orchestrator.log import get_logger
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".cr2"}
 
 log = get_logger("camera_orchestrator.batch")  # reconfigured after config load in main()
 
@@ -153,6 +157,63 @@ def cmd_grab(args: argparse.Namespace, cfg: Config) -> None:
         sys.exit(1)
 
 
+def cmd_align(args: argparse.Namespace, cfg: Config) -> None:
+    request = AlignRequest(
+        out_dir=args.out or cfg.grab.out_dir,
+        iso=args.iso,
+        shutter=args.shutter,
+        aperture=args.aperture,
+        bulb_seconds=args.bulb,
+    )
+    try:
+        result = build_align_service(cfg).align(request)
+    except CameraError as exc:
+        log.error(str(exc))
+        sys.exit(1)
+
+    if (result.solved and result.center_ra_deg is not None
+            and result.center_dec_deg is not None
+            and result.scale_arcsec_per_px is not None):
+        log.info("Aligned", extra={
+            "ra": round(result.center_ra_deg, 4),
+            "dec": round(result.center_dec_deg, 4),
+            "scale": round(result.scale_arcsec_per_px, 2),
+            "annotated": result.annotated_path,
+        })
+    else:
+        log.warning("No solution", extra={"frame": result.frame_path})
+
+
+def cmd_session(args: argparse.Namespace, cfg: Config) -> None:
+    request = SessionRequest(
+        out_dir=args.out or cfg.grab.out_dir,
+        iso=args.iso,
+        shutter=args.shutter,
+        bulb_seconds=args.bulb,
+        aperture=args.aperture,
+        lights=args.lights,
+        darks=args.darks,
+        bias=args.bias,
+        download=args.download,
+    )
+
+    def before_phase(kind: str) -> None:
+        if kind in ("dark", "bias"):
+            input(f"Cover the lens for {kind} frames, then press Enter…")
+        else:
+            input(f"Ready for {kind} frames (lens uncovered)? Press Enter…")
+
+    try:
+        result = build_session_service().run(request, before_phase=before_phase)
+    except CameraError as exc:
+        log.error(str(exc))
+        sys.exit(1)
+
+    log.info("Session complete", extra={
+        "counts": result.counts, "downloaded": len(result.frames),
+    })
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="camera-orchestrator")
     parser.add_argument("--config", default="config.yaml", help="Config YAML path")
@@ -192,6 +253,27 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Transfer each frame over USB to --out (default: shoot to the card only; pull later with grab)")
     cap.add_argument("--status", action="store_true", help="Print camera status and exit")
 
+    al = sub.add_parser("align", help="Capture one frame and solve it to check pointing")
+    al.add_argument("--out", default=None, help="Output directory (default: grab.out_dir from config)")
+    al.add_argument("--iso", default=None, help="ISO setting, e.g. 800")
+    al.add_argument("--shutter", default=None, help="Shutter speed, e.g. 2 or 1/60 (ignored with --bulb)")
+    al.add_argument("--aperture", default=None, help="Aperture f-number, e.g. 4")
+    al.add_argument("--bulb", metavar="SECONDS", type=float, default=None,
+                    help="Bulb exposure length in seconds (overrides --shutter)")
+
+    ses = sub.add_parser("session", help="Run an imaging session: lights + darks + bias")
+    ses.add_argument("--out", default=None, help="Output directory (default: grab.out_dir from config)")
+    ses.add_argument("--iso", default=None, help="ISO for lights and darks, e.g. 800")
+    ses.add_argument("--shutter", default=None, help="Shutter for lights and darks (bias uses fastest)")
+    ses.add_argument("--aperture", default=None, help="Aperture f-number, e.g. 4")
+    ses.add_argument("--bulb", metavar="SECONDS", type=float, default=None,
+                     help="Bulb exposure for lights and darks (overrides --shutter)")
+    ses.add_argument("--lights", type=int, default=0, help="Number of light frames")
+    ses.add_argument("--darks", type=int, default=0, help="Number of dark frames (lens capped)")
+    ses.add_argument("--bias", type=int, default=0, help="Number of bias frames (fastest shutter, lens capped)")
+    ses.add_argument("--download", action="store_true",
+                     help="Transfer frames over USB to --out (default: shoot to the card only)")
+
     return parser
 
 
@@ -208,6 +290,10 @@ def main() -> None:
         cmd_grab(args, cfg)
     elif args.command == "capture":
         cmd_capture(args, cfg)
+    elif args.command == "align":
+        cmd_align(args, cfg)
+    elif args.command == "session":
+        cmd_session(args, cfg)
     elif args.command == "batch":
         if args.mode:
             cfg.solver.mode = args.mode

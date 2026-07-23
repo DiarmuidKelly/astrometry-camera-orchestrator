@@ -8,7 +8,9 @@ from __future__ import annotations
 from camera_orchestrator.adapters.camera.gphoto import GphotoCamera
 from camera_orchestrator.adapters.solvers.docker import DockerSolver
 from camera_orchestrator.adapters.storage.sidecar import SidecarSolveRepository
+from camera_orchestrator.application.align_service import AlignService
 from camera_orchestrator.application.capture_service import CaptureService
+from camera_orchestrator.application.session_service import SessionService
 from camera_orchestrator.config import Config
 from camera_orchestrator.domain.ports.camera import Camera
 from camera_orchestrator.domain.ports.solver import Solver
@@ -38,3 +40,13 @@ def build_capture_service() -> CaptureService:
 def build_repository() -> SolveRecordRepository:
     """Build the solve-record persistence backend (filesystem sidecar today)."""
     return SidecarSolveRepository()
+
+
+def build_align_service(cfg: Config) -> AlignService:
+    """AlignService wired with the capture service + solver factory."""
+    return AlignService(build_capture_service(), lambda: build_solver(cfg), cfg)
+
+
+def build_session_service() -> SessionService:
+    """SessionService wired with the capture service."""
+    return SessionService(build_capture_service())
