@@ -126,6 +126,31 @@ options:
   --poll SECONDS  Poll camera every N seconds for new files
 ```
 
+### Live view (focus aid)
+
+A standalone tool for checking focus before a session — streams the camera's live
+view to a window without saving any files to disk.
+
+**On the 5D Mark II body first:**
+1. Menu → Live View shooting → Enable
+2. Press the live view button to raise the mirror
+
+Then run:
+
+```bash
+uv run python tools/liveview_demo.py
+```
+
+Controls:
+
+| Key | Action |
+|-----|--------|
+| `+` / `=` | Zoom in (crops centre — useful for checking star focus) |
+| `-` | Zoom out |
+| `q` / Esc | Quit |
+
+gvfs is released automatically before claiming the USB device.
+
 ### Tethered capture
 
 Drive a connected Canon DSLR (validated on the 5D Mark II) over USB. Capture is
@@ -133,7 +158,7 @@ card-only by default (fast for bulk sequences); `--download` transfers to `--out
 
 ```bash
 uv run camera-orchestrator capture --status
-uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30                 # 30 subs to the card
+   --count 30                 # 30 subs to the card
 uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30 --download      # download each frame
 uv run camera-orchestrator capture --bulb 30 --count 20 --download                  # 30s bulb subs
 ```
