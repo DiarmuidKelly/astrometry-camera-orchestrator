@@ -238,6 +238,43 @@ def cmd_sequence(args: argparse.Namespace, cfg: Config) -> None:
     })
 
 
+def cmd_solve(args: argparse.Namespace, cfg: Config) -> None:
+    path = Path(args.file)
+    if not path.is_file():
+        log.error("File not found", extra={"path": str(path)})
+        sys.exit(1)
+
+    solver = build_solver(cfg)
+    repo = build_repository()
+
+    if repo.exists(path.name, str(path.parent)) and not args.force:
+        log.error(
+            "Sidecar already exists — pass --force to re-solve",
+            extra={"path": str(path)},
+        )
+        sys.exit(1)
+
+    annotate_out = str(path.parent / (path.stem + "_solved.png")) if args.annotate else None
+
+    log.info("Solving", extra={"file": str(path)})
+    job = solve_file(str(path), solver, cfg, annotate_out=annotate_out)
+    record = job.to_record(cfg)
+
+    repo.save(record, str(path.parent))
+
+    if job.solved and record.solve is not None:
+        log.info("Solved", extra={
+            "ra": round(record.solve.center_ra_deg, 4),
+            "dec": round(record.solve.center_dec_deg, 4),
+            "scale": round(record.solve.scale_arcsec_per_px, 2),
+        })
+        if annotate_out:
+            log.info("Annotated overlay saved", extra={"path": annotate_out})
+    else:
+        log.error("No solution", extra={"error": record.error or "solver returned None"})
+        sys.exit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="camera-orchestrator")
     parser.add_argument("--config", default="config.yaml", help="Config YAML path")
@@ -290,6 +327,15 @@ def build_parser() -> argparse.ArgumentParser:
     al.add_argument("--bulb", metavar="SECONDS", type=float, default=None,
                     help="Bulb exposure length in seconds (overrides --shutter)")
 
+    solve_p = sub.add_parser("solve", help="Plate-solve a single image file in place")
+    solve_p.add_argument("file", help="Path to the image file (JPEG, CR2, etc.)")
+    solve_p.add_argument("--annotate", action="store_true",
+                         help="Write an annotated overlay to <file>_solved.png alongside the source")
+    solve_p.add_argument("--force", action="store_true",
+                         help="Re-solve even if a sidecar JSON already exists")
+    solve_p.add_argument("--mode", choices=["fast", "accurate"], default=None,
+                         help="Override solver mode from config")
+
     seq = sub.add_parser("sequence", help="Fire an imaging sequence: lights + darks + bias")
     seq.add_argument("--out", default=None, help="Parent output directory (default: grab.out_dir from config)")
     seq.add_argument("--name", default=None,
@@ -318,7 +364,11 @@ def main() -> None:
     log = get_logger("camera_orchestrator.batch",
                      fmt=cfg.logging.format, level=cfg.logging.level)
 
-    if args.command == "grab":
+    if args.command == "solve":
+        if args.mode:
+            cfg.solver.mode = args.mode
+        cmd_solve(args, cfg)
+    elif args.command == "grab":
         cmd_grab(args, cfg)
     elif args.command == "capture":
         cmd_capture(args, cfg)
