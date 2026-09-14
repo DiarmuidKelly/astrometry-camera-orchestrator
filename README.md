@@ -2,6 +2,16 @@
 
 Python tool for plate-solving astrophotography frames using a dockerised [astrometry.net](https://astrometry.net) solver, with camera image grab support via gphoto2.
 
+## Examples
+
+**M31 Andromeda Galaxy** — 64 × 2s, ISO 3200, 200mm f/4, no tracking mount, Canon 5D Mark II. Stacked in Siril.
+
+![Andromeda Galaxy](docs/images/20260914-andromeda.jpg)
+
+**Plate-solve overlay** — `align` command output: solved centre RA/Dec + NGC annotations overlaid on the capture frame.
+
+![Andromeda solved overlay](docs/images/andromeda-solved-overlay.png)
+
 ## What it does
 
 - Batch plate-solves a folder of JPEG or Canon CR2 RAW images (CR3 not yet supported)
