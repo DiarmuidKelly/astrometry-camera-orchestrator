@@ -4,7 +4,7 @@ Python tool for plate-solving astrophotography frames using a dockerised [astrom
 
 ## Examples
 
-**M31 Andromeda Galaxy** — 64 × 2s, ISO 3200, 200mm f/4, no tracking mount, Canon 5D Mark II. Stacked in Siril.
+**M31 Andromeda Galaxy** — 64 × 2s, ISO 3200, 200mm f/2.8, no tracking mount, Canon 5D Mark II. Stacked in Siril.
 
 ![Andromeda Galaxy](docs/images/20260914-andromeda.jpg)
 
