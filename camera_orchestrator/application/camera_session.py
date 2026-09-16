@@ -38,6 +38,13 @@ log = get_logger("camera_orchestrator.camera_session")
 # concrete adapter; tests supply a fake).
 CameraFactory = Callable[[], Camera]
 
+# How soon to re-check when a release lands while the camera is busy.
+_RETRY_DELAY_S = 2.0
+
+# Give up re-checking after this many attempts — a borrow that never ends means
+# the connection is wanted; the next stream teardown will ask again.
+_MAX_RETRIES = 5
+
 
 class CameraSession:
     """Owns a single live Camera and serialises access to it.
@@ -62,6 +69,9 @@ class CameraSession:
         # Reentrant: a service may acquire while already holding the session on
         # the same thread (nested composition) without deadlocking.
         self._lock = threading.RLock()
+        # Pending debounced close (see release_when_idle).
+        self._idle_timer: threading.Timer | None = None
+        self._retries = 0
 
     # -- state -------------------------------------------------------------
 
@@ -154,7 +164,81 @@ class CameraSession:
     def close(self) -> None:
         """Close the underlying camera and release the session's claim."""
         with self._lock:
+            self._cancel_idle_close()
             self._shutdown()
+
+    def release_when_idle(self, delay: float = 15.0) -> None:
+        """Close the connection after `delay` seconds if nothing borrows it first.
+
+        An open PTP session keeps the body awake, and live view holds the mirror
+        up with the sensor powered — the heaviest draw there is. Once the stream
+        stops there is usually nothing to hold the camera for, so let it sleep.
+
+        `delay` of 0 means "as soon as possible" — a deliberate stop. A longer
+        delay debounces the implicit case, so a page reload or a sequence between
+        phases borrows again and cancels the close rather than paying for a
+        reconnect. Any borrow cancels a pending close (see _open).
+
+        **Never blocks.** This is called from a request handler, and a capture
+        can hold the camera for hours; if it is busy now, the close is deferred
+        to a timer instead of waiting on it.
+        """
+        if not self._lock.acquire(blocking=False):
+            self._arm_idle_timer(max(delay, _RETRY_DELAY_S))
+            return
+        try:
+            self._cancel_idle_close()
+            if self._camera is None:
+                return
+            if delay <= 0 and self._depth == 0:
+                self._shutdown()          # deliberate stop, nothing holding it
+                return
+            self._arm_idle_timer(delay if delay > 0 else _RETRY_DELAY_S)
+        finally:
+            self._lock.release()
+
+    def _arm_idle_timer(self, delay: float) -> None:
+        """(Re)schedule a close attempt. Safe with or without the lock held."""
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+        timer = threading.Timer(delay, self._close_if_idle)
+        timer.daemon = True
+        self._idle_timer = timer
+        timer.start()
+
+    def _close_if_idle(self) -> None:
+        """Timer callback: close only if nobody is holding the camera.
+
+        Retries are capped. A borrow that never ends (a long sequence, or a leak)
+        would otherwise re-arm the timer forever; the connection is wanted in
+        that case anyway, and the next stream teardown asks again.
+        """
+        if self._retries >= _MAX_RETRIES:
+            self._retries = 0
+            return
+        if not self._lock.acquire(blocking=False):
+            self._retries += 1
+            self._arm_idle_timer(_RETRY_DELAY_S)   # still busy; come back later
+            return
+        try:
+            self._idle_timer = None
+            if self._depth > 0:
+                self._retries += 1
+                self._arm_idle_timer(_RETRY_DELAY_S)
+                return
+            self._retries = 0
+            if self._camera is not None:
+                log.info("Releasing idle camera", extra={"reason": "no borrowers"})
+                self._shutdown()
+        finally:
+            self._lock.release()
+
+    def _cancel_idle_close(self) -> None:
+        """Drop a pending idle close. Lock must be held."""
+        self._retries = 0
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
 
     def __enter__(self) -> "CameraSession":
         return self
@@ -166,9 +250,11 @@ class CameraSession:
 
     def _open(self) -> Camera:
         """Return the live camera, opening it on first use. Lock must be held."""
+        self._cancel_idle_close()   # somebody wants it; don't release underneath them
         if self._camera is None:
-            log.info("Opening camera session")
-            self._camera = self._factory()
+            camera = self._factory()      # may raise; log only once it succeeded,
+            log.info("Opened camera session")   # so a failed open isn't reported as one
+            self._camera = camera
         return self._camera
 
     def _shutdown(self) -> None:

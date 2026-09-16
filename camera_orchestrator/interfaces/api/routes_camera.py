@@ -36,6 +36,11 @@ FRAME_INTERVAL_S = 1 / 12
 # frame", not as a stalled response.
 STREAM_PREVIEW_TIMEOUT_S = 0.5
 
+# How long the camera stays open after the last viewer leaves. Long enough that
+# a page reload or a sequence between phases does not pay for a reconnect;
+# short enough that walking away releases the body to sleep.
+IDLE_RELEASE_S = 15.0
+
 # The one-shot fallback can afford to wait a little longer — it has no next frame.
 SINGLE_PREVIEW_TIMEOUT_S = 2.0
 
@@ -96,29 +101,41 @@ async def _mjpeg_frames(
       stream cleanly so the browser's <img> fires onerror and the UI can say
       "enable live view on the camera".
     """
-    if first is not None:
-        yield _part(first)
-        await asyncio.sleep(FRAME_INTERVAL_S)
-    while not await request.is_disconnected():
-        if session.in_use:
-            # Something is mid-operation on the body. Skip rather than contend.
-            # Keyed on actual camera use, NOT on job state: an align job spends
-            # most of its life plate-solving in Docker with the camera idle, and
-            # gating on "a camera job is running" blocked live view for the whole
-            # solve — ~15s of dead stream with the camera sitting ready.
+    try:
+        if first is not None:
+            yield _part(first)
             await asyncio.sleep(FRAME_INTERVAL_S)
-            continue
-        try:
-            frame = await anyio.to_thread.run_sync(
-                session.preview, STREAM_PREVIEW_TIMEOUT_S)
-        except CameraBusyError:
+        while not await request.is_disconnected():
+            if session.in_use:
+                # Something is mid-operation on the body. Skip rather than contend.
+                # Keyed on actual camera use, NOT on job state: an align job spends
+                # most of its life plate-solving in Docker with the camera idle, and
+                # gating on "a camera job is running" blocked live view for the whole
+                # solve — ~15s of dead stream with the camera sitting ready.
+                await asyncio.sleep(FRAME_INTERVAL_S)
+                continue
+            try:
+                frame = await anyio.to_thread.run_sync(
+                    session.preview, STREAM_PREVIEW_TIMEOUT_S)
+            except CameraBusyError:
+                await asyncio.sleep(FRAME_INTERVAL_S)
+                continue
+            except CameraError as exc:
+                log.info("Live view stream ended", extra={"reason": str(exc)})
+                return
+            yield _part(frame)
             await asyncio.sleep(FRAME_INTERVAL_S)
-            continue
-        except CameraError as exc:
-            log.info("Live view stream ended", extra={"reason": str(exc)})
-            return
-        yield _part(frame)
-        await asyncio.sleep(FRAME_INTERVAL_S)
+    except (asyncio.CancelledError, GeneratorExit):
+        # The browser closed the <img>, or the page navigated away. Normal, and
+        # the commonest way this generator ends — it must not surface as an
+        # unhandled error in the server log.
+        log.info("Live view stream closed by the client")
+        raise
+    finally:
+        # Nothing is watching any more. Let the body drop the mirror and sleep
+        # rather than holding the PTP session open — live view is the heaviest
+        # draw on the battery. Debounced, so restarting the stream costs nothing.
+        session.release_when_idle(IDLE_RELEASE_S)
 
 
 @router.get("/liveview.mjpg")
@@ -150,6 +167,28 @@ async def liveview(
         media_type=f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}",
         headers=_NO_STORE,
     )
+
+
+@router.post("/release")
+async def release(
+    session: CameraSession = Depends(get_camera_session),
+) -> dict[str, bool]:
+    """Drop the PTP session so the body returns to rest.
+
+    Stopping the stream is not enough on its own: while the session is open the
+    camera stays in live view with the mirror up and the sensor powered, which
+    is the heaviest draw on the battery. Closing the session is what puts the
+    mirror down.
+
+    Called when the user stops live view deliberately — the implicit case (tab
+    closed, page reloaded) is handled by the stream's debounced release instead,
+    so a reload does not pay for a reconnect.
+
+    Safe to call at any time: a borrow in flight is left alone and the release
+    is deferred, so this cannot interrupt a capture.
+    """
+    session.release_when_idle(0.0)
+    return {"ok": True}
 
 
 @router.get("/frame.jpg")

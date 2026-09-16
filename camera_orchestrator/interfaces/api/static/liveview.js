@@ -17,7 +17,7 @@
  * Keyboard handling lives in keys.js; this class exposes the verbs it calls.
  */
 
-import { frameUrl, liveViewUrl } from "./api.js";
+import { frameUrl, liveViewUrl, releaseCamera } from "./api.js";
 import { qs } from "./util.js";
 
 /**
@@ -126,6 +126,11 @@ export class LiveView {
     // Blanking src is what actually closes the MJPEG connection; the backend
     // holds the camera open for as long as the socket is up.
     this.img.removeAttribute("src");
+    // Closing the stream is not enough — while the PTP session is open the body
+    // stays in live view with the mirror up. Ask the server to drop it so the
+    // camera goes back to rest. Deliberate stop, so release now rather than on
+    // the debounce a dropped connection gets.
+    releaseCamera().catch(() => {});   // best effort; the debounce covers failure
     this._setState("idle");
   }
 
@@ -255,6 +260,11 @@ export class LiveView {
     this._applyTransform();
   }
 
+  /** Current zoom step, for anything mirroring the control state. */
+  get zoomIndex() {
+    return this.cropIndex;
+  }
+
 
   /**
    * Normalised frame coords (0..1) under a pointer event.
@@ -325,6 +335,8 @@ export class LiveView {
     const ty = -s * (this.centre.y - 0.5) * h;
     this.img.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
     this.zoomLabel.textContent = s === 1 ? "fit" : `${s.toFixed(2)}×`;
+    // The bar is one of several ways to zoom, so it follows rather than leads.
+    if (this.zoomBar) this.zoomBar.value = String(this.cropIndex);
     this.root.dataset.zoomed = s > 1 ? "true" : "false";
   }
 
@@ -332,6 +344,12 @@ export class LiveView {
     qs("[data-zoom-in]", this.root).addEventListener("click", () => this.zoomIn());
     qs("[data-zoom-out]", this.root).addEventListener("click", () => this.zoomOut());
     qs("[data-zoom-reset]", this.root).addEventListener("click", () => this.zoomReset());
+
+    this.zoomBar = qs("[data-zoom-bar]", this.root);
+    this.zoomBar.max = String(CROP_STEPS.length - 1);
+    this.zoomBar.addEventListener("input", () => {
+      this.setZoomIndex(Number(this.zoomBar.value));
+    });
   }
 
   _bindPan() {
@@ -389,15 +407,28 @@ export class LiveView {
     this.viewport.addEventListener("pointerup", end);
     this.viewport.addEventListener("pointercancel", end);
 
-    // Pinch/scroll zoom for the phone and trackpad case. Keyboard is primary;
-    // this is the same discrete steps, just reached differently.
+    // Trackpad mapping, matching what maps and design tools do:
+    //   two-finger scroll  -> pan        (wheel with deltaX/deltaY)
+    //   pinch              -> zoom       (the browser reports it as ctrl+wheel)
+    // Binding plain wheel to zoom fights the hardware: on a trackpad scrolling
+    // IS the pan gesture, and there is no middle button to fall back on.
     this.viewport.addEventListener(
       "wheel",
       (event) => {
         event.preventDefault();
-        const anchor = this.pointToFrame(event);
-        if (event.deltaY < 0) this.setZoomIndex(this.cropIndex + 1, anchor);
-        else this.setZoomIndex(this.cropIndex - 1, anchor);
+        if (event.ctrlKey) {                       // pinch, or ctrl+wheel on a mouse
+          const anchor = this.pointToFrame(event);
+          if (event.deltaY < 0) this.setZoomIndex(this.cropIndex + 1, anchor);
+          else this.setZoomIndex(this.cropIndex - 1, anchor);
+          return;
+        }
+        if (this.scale === 1) return;              // nothing to pan when fitted
+        const w = this.img.clientWidth || 1;
+        const h = this.img.clientHeight || 1;
+        this.centre.x += event.deltaX / (w * this.scale);
+        this.centre.y += event.deltaY / (h * this.scale);
+        this._clampCentre();
+        this._applyTransform();
       },
       { passive: false },
     );

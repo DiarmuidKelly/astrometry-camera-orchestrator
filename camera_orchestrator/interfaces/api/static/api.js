@@ -106,6 +106,15 @@ export const getCameraStatus = () => request("/api/camera/status");
 export const reconnectCamera = () =>
   request("/api/camera/reconnect", { method: "POST" });
 
+/**
+ * Drop the PTP session so the body returns to rest.
+ *
+ * Stopping the stream alone leaves the camera in live view with the mirror up —
+ * the heaviest draw on the battery. Closing the session is what puts it down.
+ */
+export const releaseCamera = () =>
+  request("/api/camera/release", { method: "POST" });
+
 /** MJPEG stream URL. Cache-busted so a retry actually re-opens the stream. */
 export const liveViewUrl = () =>
   MOCK_ENABLED
@@ -144,41 +153,190 @@ export const startSequence = (body) => postJob("sequence", body);
 export const startBatch = (body) => postJob("batch", body);
 export const startSolve = (body) => postJob("solve", body);
 
-export const listJobs = () => request("/api/jobs");
-export const getJob = (id) => request(`/api/jobs/${id}`);
+// Kept as the fallback the socket uses while it is reconnecting, and as the
+// tested REST path. Live job state arrives on the socket, not by polling.
 export const confirmJob = (id) =>
   request(`/api/jobs/${id}/confirm`, { method: "POST" });
 export const cancelJob = (id) =>
   request(`/api/jobs/${id}/cancel`, { method: "POST" });
 
-/**
- * Subscribe to a job's SSE stream. Each event's `data` is a full Job JSON.
- *
- * Returns an unsubscribe function. The caller is responsible for calling it —
- * EventSource reconnects forever otherwise, and a finished job's stream closing
- * would look like an error.
+/* ---------------------------------------------------------- the job socket */
+
+/*
+ * ONE connection carries every job. It used to be one EventSource per tracked
+ * job, and that is what broke live view: a browser allows ~6 concurrent
+ * connections per origin, the MJPEG stream holds one of them permanently and
+ * never ends, and EventSource re-dials forever on error — so after a handful of
+ * jobs the budget was gone. An exhausted budget does not throw; requests simply
+ * queue, so live view "just would not open" and finished jobs looked lost.
+ * Do not reintroduce a stream per job.
  */
-export function subscribeJob(id, { onJob, onError } = {}) {
-  if (MOCK_ENABLED) {
-    return window.__mockSubscribeJob(id, { onJob, onError });
+
+/** Reconnect delays in ms; the last value repeats. Fast enough to be invisible
+ * at the scope, slow enough not to hammer a backend that is genuinely down. */
+const WS_BACKOFF_MS = [400, 800, 1600, 3200, 5000, 10_000];
+
+/** Silence that means the connection is dead. The server heartbeats every 15 s,
+ * so this is three missed beats — a laptop that slept or Wi-Fi that dropped
+ * without a close frame, which otherwise hangs silently forever. */
+const WS_SILENCE_MS = 45_000;
+
+/** Failed attempts before the UI is told; below this a blip is invisible. */
+const WS_QUIET_ATTEMPTS = 3;
+
+class JobSocket {
+  /**
+   * @param {object} handlers {onSnapshot(jobs), onJob(job), onStatus(connected),
+   *                           onError(err)}
+   */
+  constructor(handlers) {
+    this.handlers = handlers;
+    this.attempt = 0;
+    this.closed = false;
+    this.socket = null;
+    this.silenceTimer = null;
+    this.retryTimer = null;
+    this._open();
   }
 
-  const source = new EventSource(`/api/jobs/${id}/events`);
+  /** ws:// or wss:// derived from the page, so it works over the LAN too. */
+  static url() {
+    const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${scheme}//${location.host}/api/ws`;
+  }
 
-  source.onmessage = (event) => {
+  get connected() {
+    return this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  _open() {
+    if (this.closed) return;
+    let socket;
     try {
-      onJob?.(JSON.parse(event.data));
+      socket = new WebSocket(JobSocket.url());
     } catch (err) {
-      onError?.(new ApiError("Malformed job event.", { cause: err }));
+      this._retry();
+      return;
     }
-  };
+    this.socket = socket;
 
-  source.onerror = () => {
-    // EventSource fires onerror both for a genuine drop and for the normal
-    // close after a terminal job state. The caller decides which by looking at
-    // the last job state it saw, so we only report, never tear down here.
-    onError?.(new ApiError("Job event stream interrupted."));
-  };
+    socket.onopen = () => {
+      this.attempt = 0;
+      this._armSilenceTimer();
+      this.handlers.onStatus?.(true);
+      // No resync request needed: the server's first frame is a snapshot of
+      // every job, which is what makes a dropped connection self-healing.
+    };
 
-  return () => source.close();
+    socket.onmessage = (event) => {
+      this._armSilenceTimer();
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch (err) {
+        this.handlers.onError?.(new ApiError("Malformed job message.", { cause: err }));
+        return;
+      }
+      this._dispatch(message);
+    };
+
+    socket.onclose = () => {
+      this._clearSilenceTimer();
+      this.handlers.onStatus?.(false);
+      this._retry();
+    };
+
+    // A failed connect fires error then close; close does the retrying.
+    socket.onerror = () => {};
+  }
+
+  _dispatch(message) {
+    switch (message.type) {
+      case "snapshot":
+        this.handlers.onSnapshot?.(message.jobs || []);
+        break;
+      case "job":
+        this.handlers.onJob?.(message.job);
+        break;
+      case "ack":
+        this.handlers.onJob?.(message.job);
+        break;
+      case "ping":
+        this._send({ type: "pong" });
+        break;
+      case "error":
+        this.handlers.onError?.(new ApiError(message.message || "Job command failed."));
+        break;
+      default:
+        break; // forwards-compatible: an unknown message type is not an error
+    }
+  }
+
+  _armSilenceTimer() {
+    this._clearSilenceTimer();
+    this.silenceTimer = setTimeout(() => {
+      // Nothing for three heartbeats. Close it ourselves so onclose runs the
+      // reconnect; a half-open socket never fires anything on its own.
+      this.socket?.close();
+    }, WS_SILENCE_MS);
+  }
+
+  _clearSilenceTimer() {
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = null;
+  }
+
+  _retry() {
+    if (this.closed || this.retryTimer) return;
+    const delay = WS_BACKOFF_MS[Math.min(this.attempt, WS_BACKOFF_MS.length - 1)];
+    this.attempt += 1;
+    if (this.attempt === WS_QUIET_ATTEMPTS) {
+      this.handlers.onError?.(new ApiError("Lost the job connection — reconnecting."));
+    }
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this._open();
+    }, delay);
+  }
+
+  _send(message) {
+    if (!this.connected) return false;
+    this.socket.send(JSON.stringify(message));
+    return true;
+  }
+
+  /** Answer a prompt. Falls back to the POST route while reconnecting. */
+  confirm(id) {
+    return this._send({ type: "confirm", job_id: id })
+      ? Promise.resolve(null)
+      : confirmJob(id);
+  }
+
+  /** Request cancellation. Falls back to the POST route while reconnecting. */
+  cancel(id) {
+    return this._send({ type: "cancel", job_id: id })
+      ? Promise.resolve(null)
+      : cancelJob(id);
+  }
+
+  close() {
+    this.closed = true;
+    this._clearSilenceTimer();
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.socket?.close();
+  }
+}
+
+/**
+ * Open the one job socket. Returns an object with `confirm(id)`, `cancel(id)`
+ * and `close()`; updates arrive through the handlers.
+ *
+ * `onSnapshot` fires on every (re)connect with the complete job list — treat it
+ * as authoritative and overwrite, never merge-if-newer. That is the fix for a
+ * job that finished while the connection was down: the old per-job streams left
+ * such a job non-terminal in the client forever, which pinned live view paused.
+ */
+export function connectJobs(handlers = {}) {
+  if (MOCK_ENABLED) return window.__mockConnectJobs(handlers);
+  return new JobSocket(handlers);
 }

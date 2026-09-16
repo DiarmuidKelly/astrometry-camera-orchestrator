@@ -303,3 +303,47 @@ def test_solving_phase_does_not_block_live_view():
         assert client.get("/api/camera/frame.jpg").status_code == 200
     finally:
         release.set()
+
+
+def test_release_closes_the_session_so_the_mirror_drops():
+    # Stopping the stream is not enough: while the PTP session is open the body
+    # stays in live view with the mirror up, which is the heaviest battery draw.
+    session = CameraSession(camera_factory=lambda: MockCamera())
+    app = create_app(Config())
+    app.dependency_overrides[get_camera_session] = lambda: session
+    client = TestClient(app)
+
+    client.get("/api/camera/frame.jpg")                  # opens the session
+    assert session.is_open is True
+
+    assert client.post("/api/camera/release").status_code == 200
+    assert session.is_open is False                      # connection actually dropped
+
+
+def test_release_does_not_interrupt_a_capture_in_flight():
+    # A capture can hold the camera for hours, so a release request must defer
+    # rather than wait on it — this is called from a request handler.
+    session = CameraSession(camera_factory=lambda: MockCamera())
+    done = threading.Event()
+
+    with session.acquire():                              # a capture holds the camera
+        t = threading.Thread(target=lambda: (session.release_when_idle(0.0), done.set()))
+        t.start()
+        assert done.wait(timeout=5), "release blocked on the in-flight borrow"
+        assert session.is_open is True                   # deferred, not yanked
+        t.join(timeout=5)
+
+    session.close()
+
+
+def test_a_borrow_cancels_a_pending_idle_release():
+    # A sequence between phases, or a user restarting the stream, must not pay
+    # for a reconnect just because the debounce was already ticking.
+    session = CameraSession(camera_factory=lambda: MockCamera())
+    with session.acquire():
+        pass
+    session.release_when_idle(30.0)                      # long fuse
+    with session.acquire():
+        pass                                             # borrowing cancels it
+    assert session.is_open is True
+    session.close()

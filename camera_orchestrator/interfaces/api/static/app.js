@@ -277,7 +277,8 @@ function main() {
   updatePrompt();
   refreshStatus();
   setInterval(refreshStatus, STATUS_POLL_MS);
-  jobs.hydrate();
+  // No jobs.hydrate() any more: the job socket's first frame is a snapshot of
+  // every job, so a reload mid-sequence resyncs without an extra request.
   browser.load("");
   config.load();
 

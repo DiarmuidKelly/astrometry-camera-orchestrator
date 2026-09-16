@@ -1,4 +1,8 @@
-"""Job routes — start long-running work, then poll or stream its progress.
+"""Job routes — start long-running work, then follow it on the job socket.
+
+Progress does **not** stream from here. Live updates are multiplexed onto the one
+WebSocket in `routes_ws.py`; these routes start work, list it and answer prompts.
+The reasoning is a browser's ~6-connections-per-origin cap — see that module.
 
 Each POST validates, hands a closure to the `JobRegistry` and returns the `Job`
 straight away. The closure is the only place service calls happen, and it runs on
@@ -14,11 +18,9 @@ always get an id back.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import AsyncIterator
 
 import anyio.to_thread
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException
 
 from camera_orchestrator.application.align_service import AlignService
 from camera_orchestrator.application.batch_service import BatchSolveResult, BatchSolveService
@@ -44,7 +46,6 @@ from camera_orchestrator.interfaces.api.deps import (
 )
 from camera_orchestrator.interfaces.api.jobs import JobContext, JobRegistry
 from camera_orchestrator.interfaces.api.models import (
-    ACTIVE_STATES,
     AlignJobBody,
     BatchJobBody,
     CaptureJobBody,
@@ -55,10 +56,6 @@ from camera_orchestrator.interfaces.api.models import (
 )
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
-
-# How long an SSE stream parks waiting for a change before emitting a keep-alive
-# comment. Long enough not to churn, short enough that a proxy will not time out.
-SSE_TICK_S = 15.0
 
 # Phases whose prompt means "cap the lens" — the only confirmation a sequence
 # needs from the UI. Lights start immediately: the POST was the go-ahead.
@@ -276,35 +273,3 @@ async def cancel_job(job_id: str, registry: JobRegistry = Depends(get_registry))
     first. The returned Job may still read 'running'.
     """
     return await anyio.to_thread.run_sync(registry.cancel, job_id)
-
-
-async def _job_events(request: Request, registry: JobRegistry, job_id: str) -> AsyncIterator[str]:
-    """Emit the job as SSE on every change, then stop once it is terminal."""
-    version = -1  # no real version matches, so the first event fires immediately
-    while not await request.is_disconnected():
-        current, job = await anyio.to_thread.run_sync(
-            registry.wait, job_id, version, SSE_TICK_S)
-        if current == version:
-            # wait() returned on its timeout with nothing new — a comment line
-            # keeps the connection warm without re-sending unchanged state.
-            yield ": keep-alive\n\n"
-            continue
-        version = current
-        yield f"data: {job.model_dump_json()}\n\n"
-        if job.state not in ACTIVE_STATES:
-            return
-
-
-@router.get("/{job_id}/events")
-async def job_events(
-    job_id: str,
-    request: Request,
-    registry: JobRegistry = Depends(get_registry),
-) -> StreamingResponse:
-    """Server-sent events: one `data:` line of Job JSON per state change."""
-    registry.get(job_id)  # JobNotFoundError -> 404 before the stream opens
-    return StreamingResponse(
-        _job_events(request, registry, job_id),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-    )

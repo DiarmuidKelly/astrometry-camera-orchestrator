@@ -22,7 +22,13 @@ from fastapi.staticfiles import StaticFiles
 from camera_orchestrator.application.browse_service import BrowsePathError as ServiceBrowsePathError
 from camera_orchestrator.config import Config
 from camera_orchestrator.domain.errors import BrowsePathError, CameraBusyError, CameraError
-from camera_orchestrator.interfaces.api import routes_browse, routes_camera, routes_jobs, routes_system
+from camera_orchestrator.interfaces.api import (
+    routes_browse,
+    routes_camera,
+    routes_jobs,
+    routes_system,
+    routes_ws,
+)
 from camera_orchestrator.interfaces.api.jobs import (
     DEFAULT_CONFIRM_TIMEOUT_S,
     JobConflictError,
@@ -108,6 +114,10 @@ def create_app(
     app.include_router(routes_camera.router)
     app.include_router(routes_browse.router)
     app.include_router(routes_jobs.router)
+    # The one live-update channel. Registered before the static mount like every
+    # other /api route; see routes_ws.py for why it is one socket and not one
+    # stream per job.
+    app.include_router(routes_ws.router)
 
     # Mounted last so every /api route matches first (Starlette matches in
     # registration order). Defensive: the front end is a separate deliverable and

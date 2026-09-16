@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import Depends, Request
+from fastapi import Depends, Request, WebSocket
 
 from camera_orchestrator.application.align_service import AlignService
 from camera_orchestrator.application.browse_service import BrowseService
@@ -50,6 +50,17 @@ def get_config(request: Request) -> Config:
 def get_registry(request: Request) -> JobRegistry:
     """The per-app job registry. One per app so tests get a clean slate."""
     registry: JobRegistry = request.app.state.jobs
+    return registry
+
+
+def get_ws_registry(websocket: WebSocket) -> JobRegistry:
+    """The same registry, for websocket routes.
+
+    A separate provider because FastAPI only injects `Request` into HTTP
+    endpoints; a websocket handler is handed a `WebSocket` instead. Both read the
+    one `app.state.jobs`, so the socket and the REST routes see identical state.
+    """
+    registry: JobRegistry = websocket.app.state.jobs
     return registry
 
 

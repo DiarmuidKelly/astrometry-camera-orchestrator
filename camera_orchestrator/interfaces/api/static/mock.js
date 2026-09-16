@@ -182,6 +182,10 @@ function newJob(kind, total) {
     error: null,
   };
   jobs.set(id, job);
+  // The real registry starts a worker thread on submit and pushes the state
+  // change down the socket; the mock does the same rather than waiting for a
+  // subscriber that no longer exists.
+  setTimeout(() => driveMockJob(job), 100);
   return job;
 }
 
@@ -259,10 +263,6 @@ export async function mockFetch(path, { method = "GET", body = null } = {}) {
 
   if (route === "/api/sessions") return { sessions: MOCK_SESSIONS };
 
-  if (route === "/api/jobs" && method === "GET") {
-    return { jobs: Array.from(jobs.values()) };
-  }
-
   if (route.startsWith("/api/jobs/")) {
     const rest = route.slice("/api/jobs/".length);
     if (method === "POST" && !rest.includes("/")) {
@@ -280,33 +280,42 @@ export async function mockFetch(path, { method = "GET", body = null } = {}) {
     const [id, action] = rest.split("/");
     const job = jobs.get(id);
     if (!job) throw new Error(`No such job: ${id}`);
-    if (action === "confirm") {
-      job.prompt = null;
-      job.state = "running";
-      return job;
-    }
-    if (action === "cancel") {
-      job.state = "cancelled";
-      job.ended_at = new Date().toISOString();
-      return job;
-    }
+    // The REST fallback the socket uses while reconnecting — same effect, so it
+    // goes through the same helpers and broadcasts to every fake socket.
+    if (action === "confirm") return mockConfirm(id);
+    if (action === "cancel") return mockCancel(id);
     return job;
   }
 
   throw new Error(`mock: unhandled route ${path}`);
 }
 
+/* ------------------------------------------------------- the fake job socket */
+
+/*
+ * The real backend multiplexes every job onto one WebSocket. The mock models the
+ * same shape — one fake connection, a snapshot on connect, pushes thereafter —
+ * so ?mock=1 exercises the code path that actually ships, reconnect logic aside.
+ */
+
+const sockets = new Set();
+
+function broadcast(job) {
+  for (const socket of sockets) socket.onJob?.({ ...job });
+}
+
 /**
  * Drive a fake job through its lifecycle, including the lens-cap prompt for
  * sequences, so the confirmation modal can be exercised.
+ *
+ * Started when the job is created, not when something subscribes: with one
+ * shared socket there is no per-job subscription to trigger it any more.
  */
-function mockSubscribeJob(id, { onJob } = {}) {
-  const job = jobs.get(id);
-  if (!job) return () => {};
-
+function driveMockJob(job) {
   job.state = "running";
   job.started_at = new Date().toISOString();
   mockCapturing = job.kind !== "batch" && job.kind !== "solve";
+  broadcast(job);
 
   const total = job.progress?.total ?? 1;
   let tick = 0;
@@ -315,12 +324,12 @@ function mockSubscribeJob(id, { onJob } = {}) {
   const timer = setInterval(() => {
     if (job.state === "cancelled") {
       mockCapturing = false;
-      onJob?.({ ...job });
+      broadcast(job);
       clearInterval(timer);
       return;
     }
     if (job.state === "awaiting_confirmation") {
-      onJob?.({ ...job });
+      broadcast(job);
       return;
     }
 
@@ -334,7 +343,7 @@ function mockSubscribeJob(id, { onJob } = {}) {
         kind: "lens_cap",
         message: "Cover the lens (and the viewfinder) before dark frames begin.",
       };
-      onJob?.({ ...job });
+      broadcast(job);
       return;
     }
 
@@ -357,16 +366,44 @@ function mockSubscribeJob(id, { onJob } = {}) {
             }
           : { files: total, out_dir: "incoming/20260916-mock" };
       mockCapturing = false;
-      onJob?.({ ...job });
+      broadcast(job);
       clearInterval(timer);
       return;
     }
-    onJob?.({ ...job });
+    broadcast(job);
   }, 700);
+}
 
-  return () => {
-    clearInterval(timer);
-    mockCapturing = false;
+function mockConfirm(id) {
+  const job = jobs.get(id);
+  if (!job) throw new Error(`No such job: ${id}`);
+  job.prompt = null;
+  job.state = "running";
+  broadcast(job);
+  return job;
+}
+
+function mockCancel(id) {
+  const job = jobs.get(id);
+  if (!job) throw new Error(`No such job: ${id}`);
+  job.state = "cancelled";
+  job.ended_at = new Date().toISOString();
+  broadcast(job);
+  return job;
+}
+
+/** Same interface api.js's real JobSocket exposes: confirm/cancel/close. */
+function mockConnectJobs(handlers = {}) {
+  const socket = { ...handlers };
+  sockets.add(socket);
+  setTimeout(() => {
+    handlers.onStatus?.(true);
+    handlers.onSnapshot?.(Array.from(jobs.values()).map((job) => ({ ...job })));
+  }, 60);
+  return {
+    confirm: async (id) => mockConfirm(id),
+    cancel: async (id) => mockCancel(id),
+    close: () => sockets.delete(socket),
   };
 }
 
@@ -376,5 +413,5 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // that must stay reachable without importing mock.js into the hot path.
 if (MOCK_ENABLED) {
   window.__mockFrameUrl = renderMockFrame;
-  window.__mockSubscribeJob = mockSubscribeJob;
+  window.__mockConnectJobs = mockConnectJobs;
 }

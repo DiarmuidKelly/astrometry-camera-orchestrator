@@ -79,6 +79,9 @@
       </button>
       <div class="zoom-controls" role="group" aria-label="Digital zoom">
         <button class="btn" type="button" data-zoom-out aria-label="Zoom out">−</button>
+        <input class="zoom-bar" type="range" data-zoom-bar
+               min="0" max="4" step="1" value="0"
+               aria-label="Zoom level">
         <button class="btn" type="button" data-zoom-in aria-label="Zoom in">+</button>
         <button class="btn btn-quiet" type="button" data-zoom-reset>Reset</button>
       </div>
@@ -98,6 +101,7 @@
       <li><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> pan</li>
       <li><kbd>0</kbd> reset zoom</li>
       <li>click a star to zoom on it</li>
+      <li>two-finger scroll to pan</li>
       <li><kbd>q</kbd> stop</li>
     </ul>
   </section>

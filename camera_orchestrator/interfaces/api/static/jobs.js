@@ -1,14 +1,21 @@
 /*
- * jobs.js — job tracking: SSE subscription, progress, cancel, and escalation
- * of `awaiting_confirmation` to the full-screen physical prompt.
+ * jobs.js — job tracking: the single job socket, progress, cancel, and
+ * escalation of `awaiting_confirmation` to the full-screen physical prompt.
  *
- * One EventSource per tracked job. A job in `awaiting_confirmation` blocks the
- * whole sequence server-side, so it is handed to prompts.js and takes over the
- * live-view area — it must not be possible to miss it and wonder why the run
+ * ONE connection for every job, opened once here — see the note in api.js for
+ * why a stream per job broke live view. A job in `awaiting_confirmation` blocks
+ * the whole sequence server-side, so it is handed to prompts.js and takes over
+ * the live-view area — it must not be possible to miss it and wonder why the run
  * stopped.
+ *
+ * The socket's snapshot is authoritative: every (re)connect overwrites what the
+ * panel holds. That is deliberate. The previous per-job streams reported a drop
+ * and then did nothing, so a job that finished while the connection was down
+ * stayed non-terminal in the client forever — which left `isExposing` true and
+ * live view paused for the rest of the night.
  */
 
-import { cancelJob, confirmJob, listJobs, subscribeJob } from "./api.js";
+import { connectJobs } from "./api.js";
 import { PhysicalPrompt } from "./prompts.js";
 import { el, formatDuration, formatTimestamp, qs, replaceChildren } from "./util.js";
 
@@ -39,59 +46,78 @@ export class JobsPanel {
 
     this.jobs = new Map(); // id -> job
     this.contexts = new Map(); // id -> the request body that created it
-    this.unsubscribers = new Map(); // id -> () => void
+    this.dismissed = new Set(); // ids the user cleared; a snapshot must not resurrect them
+    this.finished = new Set(); // ids already reported to onJobFinished (fires once)
     this.handlers = handlers;
+
+    // One socket for the life of the page. It also replaces the old start-up
+    // GET /api/jobs: the first frame is a snapshot, so a reload mid-sequence
+    // picks the run back up with no extra request.
+    this.socket = connectJobs({
+      onSnapshot: (jobs) => this._onSnapshot(jobs),
+      onJob: (job) => job && this._onJob(job),
+      onStatus: (connected) => {
+        this.connected = connected;
+      },
+      onError: (err) => this.handlers.onError?.(err),
+    });
 
     // Elapsed times tick locally; the server only pushes on state change.
     setInterval(() => this._renderList(), 1000);
   }
 
-  /** Pick up anything already running — e.g. after a reload mid-sequence. */
-  async hydrate() {
-    try {
-      const { jobs } = await listJobs();
-      for (const job of jobs || []) this.track(job);
-    } catch (err) {
-      this.handlers.onError?.(err);
-    }
-  }
-
   /**
-   * Start following a job (idempotent).
+   * Note a job the UI has just started, with the request body that made it.
+   *
+   * No subscription happens here — the socket is already carrying every job, and
+   * the server pushes this one the moment it is registered. The local copy just
+   * means the list paints before the first push arrives.
+   *
    * @param {object} job
    * @param {object} [context] the request body, used to describe the next phase
    */
   track(job, context = null) {
-    this.jobs.set(job.id, job);
     if (context) this.contexts.set(job.id, context);
-    if (!this.unsubscribers.has(job.id) && !TERMINAL.has(job.state)) {
-      const off = subscribeJob(job.id, {
-        onJob: (updated) => this._onJob(updated),
-        onError: () => {
-          // A stream drop after a terminal state is the normal close; only
-          // surface it if the job was still meant to be running.
-          const current = this.jobs.get(job.id);
-          if (current && !TERMINAL.has(current.state)) {
-            this.handlers.onError?.(
-              new Error(`Lost the event stream for job ${job.id}.`),
-            );
-          }
-        },
-      });
-      this.unsubscribers.set(job.id, off);
+    this.dismissed.delete(job.id);
+    this._onJob(job);
+  }
+
+  /** Replace local state wholesale from a (re)connect snapshot. */
+  _onSnapshot(jobs) {
+    const seen = new Set();
+    for (const job of jobs || []) {
+      seen.add(job.id);
+      if (this.dismissed.has(job.id)) continue;
+      this._record(job);
+    }
+    // A job the server has never heard of cannot exist: drop anything left over
+    // from a previous process (a restart while the tab stayed open).
+    for (const id of Array.from(this.jobs.keys())) {
+      if (!seen.has(id)) {
+        this.jobs.delete(id);
+        this.contexts.delete(id);
+      }
     }
     this._render();
   }
 
   _onJob(job) {
-    this.jobs.set(job.id, job);
-    if (TERMINAL.has(job.state)) {
-      this.unsubscribers.get(job.id)?.();
-      this.unsubscribers.delete(job.id);
-      if (this.prompt.jobId === job.id) this.prompt.hide();
-      this.handlers.onJobFinished?.(job);
-    }
+    if (this.dismissed.has(job.id)) return;
+    this._record(job);
     this._render();
+  }
+
+  /** Store one job and fire the terminal-transition side effects, once. */
+  _record(job) {
+    this.jobs.set(job.id, job);
+    if (!TERMINAL.has(job.state)) {
+      this.finished.delete(job.id); // cannot happen server-side, but stays honest
+      return;
+    }
+    if (this.finished.has(job.id)) return;
+    this.finished.add(job.id);
+    if (this.prompt.jobId === job.id) this.prompt.hide();
+    this.handlers.onJobFinished?.(job);
   }
 
   /* ------------------------------------------------------------- queries */
@@ -230,6 +256,8 @@ export class JobsPanel {
               type: "button",
               text: "Dismiss",
               onclick: () => {
+                // Remembered, so the next snapshot does not bring it back.
+                this.dismissed.add(job.id);
                 this.jobs.delete(job.id);
                 this.contexts.delete(job.id);
                 this._render();
@@ -241,9 +269,14 @@ export class JobsPanel {
 
   /* -------------------------------------------------------------- actions */
 
+  /* Commands go out on the same socket, so answering a prompt costs no extra
+   * connection. api.js falls back to the POST route while it is reconnecting;
+   * either way the resulting state arrives as a normal push. */
+
   async _confirm(id) {
     try {
-      this._onJob(await confirmJob(id));
+      const job = await this.socket.confirm(id);
+      if (job) this._onJob(job);
     } catch (err) {
       this.handlers.onError?.(err);
     }
@@ -251,7 +284,8 @@ export class JobsPanel {
 
   async _cancel(id) {
     try {
-      this._onJob(await cancelJob(id));
+      const job = await this.socket.cancel(id);
+      if (job) this._onJob(job);
     } catch (err) {
       this.handlers.onError?.(err);
     }

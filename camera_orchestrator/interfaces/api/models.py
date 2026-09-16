@@ -54,7 +54,7 @@ class JobPrompt(BaseModel):
 
 
 class Job(BaseModel):
-    """A long-running unit of work, polled or streamed over SSE."""
+    """A long-running unit of work, polled over HTTP or pushed on the job socket."""
 
     id: str = Field(description="Opaque job identifier (uuid4 hex).")
     kind: JobKind = Field(description="Which use-case this job runs.")

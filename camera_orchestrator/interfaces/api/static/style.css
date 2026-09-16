@@ -355,7 +355,7 @@ kbd {
   align-items: center;
   margin-top: 0.6rem;
 }
-.zoom-controls { display: flex; gap: 0.35rem; }
+.zoom-controls { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
 .zoom-controls .btn { min-width: 52px; font-size: 1.25rem; }
 
 .inline-field { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; }
@@ -673,3 +673,17 @@ kbd {
   color: var(--text-dim, #8a5a52);
   letter-spacing: 0.01em;
 }
+
+/* Zoom bar. Sits between the -/+ buttons; a trackpad has no middle button and
+   two-finger scroll is bound to panning, so this is the primary zoom control
+   for anyone not on the keyboard. */
+.zoom-bar {
+  flex: 1 1 8rem;
+  min-inline-size: 5rem;
+  max-inline-size: 14rem;
+  accent-color: var(--accent);
+  background: transparent;
+  cursor: pointer;
+  block-size: 1.6rem;
+}
+.zoom-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

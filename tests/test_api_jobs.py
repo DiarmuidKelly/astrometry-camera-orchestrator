@@ -231,9 +231,9 @@ def test_sequence_job_waits_for_a_lens_cap_confirmation(tmp_path):
 def test_job_result_datetimes_survive_json_encoding(tmp_path):
     """A SessionManifest nests datetimes; `Job.result` is typed `Any`.
 
-    If the raw model were stashed there, the SSE dump and JSONResponse would both
-    have to encode a datetime out of an untyped field. `_encode` dumps in json
-    mode up front, so what lands on the wire is already strings.
+    If the raw model were stashed there, the socket push and the JSONResponse
+    would both have to encode a datetime out of an untyped field. `_encode` dumps
+    in json mode up front, so what lands on the wire is already strings.
     """
     client = _sequence_client(MockCamera())
     job_id = client.post(
@@ -242,8 +242,6 @@ def test_job_result_datetimes_survive_json_encoding(tmp_path):
     phase = _await_state(client, job_id, "succeeded")["result"]["phases"][0]
     assert isinstance(phase["started_at"], str)
     assert datetime.fromisoformat(phase["started_at"]).tzinfo is timezone.utc
-    # And the SSE stream renders the same result without an encoder error.
-    assert '"started_at"' in client.get(f"/api/jobs/{job_id}/events").text
 
 
 def test_sequence_job_does_not_prompt_before_lights(tmp_path):
@@ -318,28 +316,6 @@ def test_solve_job_refuses_an_existing_sidecar_without_force(tmp_path):
 
 def test_batch_job_missing_folder_is_404():
     assert _client().post("/api/jobs/batch", json={"folder": "/nowhere"}).status_code == 404
-
-
-# -- streaming -------------------------------------------------------------
-
-
-def test_job_events_stream_ends_on_the_terminal_state(tmp_path):
-    client = _capture_client(MockCamera())
-    job_id = client.post("/api/jobs/capture", json={"out_dir": str(tmp_path)}).json()["id"]
-    _await_state(client, job_id, "succeeded")
-
-    response = client.get(f"/api/jobs/{job_id}/events")
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    # A terminal job emits its final state once and the generator returns, so the
-    # stream closes rather than hanging on the keep-alive tick.
-    events = [line for line in response.text.splitlines() if line.startswith("data: ")]
-    assert len(events) == 1
-    assert '"state":"succeeded"' in events[0]
-
-
-def test_job_events_for_an_unknown_job_is_404():
-    assert _client().get("/api/jobs/nope/events").status_code == 404
 
 
 def test_utc_timestamps_are_timezone_aware(tmp_path):

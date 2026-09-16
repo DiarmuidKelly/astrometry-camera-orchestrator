@@ -14,8 +14,9 @@ Three rules the registry enforces:
 - **Confirmation is a blocking callback.** `SequenceService.run` calls
   `before_phase(kind)` and blocks inside it (the CLI passes `input()`). Here the
   callback parks the job in `awaiting_confirmation` on a `threading.Event` until
-  `POST /api/jobs/{id}/confirm`, with a generous timeout so a closed browser tab
-  fails the job instead of wedging the camera for the night.
+  a `confirm` arrives (on the job socket, or `POST /api/jobs/{id}/confirm`), with
+  a generous timeout so a closed browser tab fails the job instead of wedging the
+  camera for the night.
 - **Cancellation is cooperative.** libgphoto2 calls cannot be interrupted, so a
   cancel sets a flag; runners observe it at their progress callbacks (between
   frames, between images) and raise out of the service.
@@ -58,6 +59,10 @@ _UNSET: Any = object()
 # The unit of work: given a context (progress, prompts, cancellation), return a
 # JSON-encodable result — typically a Pydantic DTO from a service call.
 JobRunner = Callable[["JobContext"], Any]
+
+# Every job, newest first. Spelled as an alias because JobRegistry defines a
+# method named `list`, which shadows the builtin inside the class body.
+JobSnapshot = list[Job]
 
 
 class JobConflictError(Exception):
@@ -161,8 +166,12 @@ class JobRegistry:
         self.confirm_timeout = confirm_timeout
         self._records: dict[str, _Record] = {}
         self._order: list[str] = []
-        # Guards every field of every record, and wakes SSE watchers on change.
+        # Guards every field of every record, and wakes watchers on change.
         self._cond = threading.Condition()
+        # Registry-wide change counter. Per-record `version` answers "did *this*
+        # job move?"; the socket watcher needs "did *anything* move?" — one
+        # cursor for every job, so one connection can carry them all.
+        self._revision = 0
 
     # -- queries -----------------------------------------------------------
 
@@ -177,9 +186,14 @@ class JobRegistry:
             return [self._records[i].job.model_copy(deep=True) for i in reversed(self._order)]
 
     def version_of(self, job_id: str) -> int:
-        """Current change counter for a job — the cursor an SSE stream holds."""
+        """Current change counter for a job — the cursor a per-job watcher holds."""
         with self._cond:
             return self._require(job_id).version
+
+    def revision(self) -> int:
+        """Current registry-wide change counter — the cursor a socket holds."""
+        with self._cond:
+            return self._revision
 
     def wait(self, job_id: str, version: int, timeout: float) -> tuple[int, Job]:
         """Block until the job changes past `version`, or `timeout` elapses.
@@ -192,6 +206,25 @@ class JobRegistry:
             if record.version == version:
                 self._cond.wait(timeout)
             return record.version, record.job.model_copy(deep=True)
+
+    def wait_any(self, revision: int, timeout: float) -> tuple[int, JobSnapshot]:
+        """Block until *any* job changes past `revision`, or `timeout` elapses.
+
+        The registry-wide counterpart of `wait`. Returns the (possibly unchanged)
+        revision and a snapshot of every job, newest first — so one watcher can
+        feed every job on a single connection, and a caller that reconnects with
+        revision=-1 gets the whole world back immediately.
+
+        Called from a worker thread: it blocks on a threading.Condition, so an
+        async caller must bridge it (anyio.to_thread.run_sync) rather than await
+        it on the event loop.
+        """
+        with self._cond:
+            if self._revision == revision:
+                self._cond.wait(timeout)
+            return self._revision, [
+                self._records[i].job.model_copy(deep=True) for i in reversed(self._order)
+            ]
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -215,6 +248,10 @@ class JobRegistry:
             self._records[record.job.id] = record
             self._order.append(record.job.id)
             snapshot = record.job.model_copy(deep=True)
+            # A new job is a registry-wide change: an already-connected socket
+            # must learn about it without waiting for its first progress tick.
+            self._revision += 1
+            self._cond.notify_all()
 
         thread = threading.Thread(
             target=self._run, args=(record, runner),
@@ -299,7 +336,7 @@ class JobRegistry:
         result: Any = None,
         error: str | None = None,
     ) -> None:
-        """Mutate a job and wake every SSE watcher.
+        """Mutate a job and wake every watcher (per-job and registry-wide).
 
         Patch-style: only the arguments passed are applied. `prompt` needs the
         _UNSET sentinel because clearing it (prompt=None on confirm) is a real
@@ -322,4 +359,5 @@ class JobRegistry:
             if prompt is not _UNSET:
                 job.prompt = prompt
             record.version += 1
+            self._revision += 1
             self._cond.notify_all()
