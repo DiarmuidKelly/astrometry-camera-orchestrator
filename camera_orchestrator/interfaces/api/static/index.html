@@ -188,11 +188,14 @@
 
         <label class="field">
           <span>Image format</span>
-          <select name="image_format">
+          <select name="image_format" aria-describedby="hint-format">
             <option value="">camera default</option>
             <option value="raw">raw</option>
             <option value="jpeg">jpeg</option>
           </select>
+          <small id="hint-format" class="field-hint">
+            Capture only — Align always shoots JPEG, Sequence always RAW
+          </small>
         </label>
 
         <label class="field field-wide">
@@ -209,6 +212,9 @@
         <label class="field field-check">
           <input type="checkbox" name="force">
           <span>Force re-solve on align</span>
+          <small class="field-hint">
+            Align only — overwrites a target the session has already shot frames for
+          </small>
         </label>
       </div>
 
