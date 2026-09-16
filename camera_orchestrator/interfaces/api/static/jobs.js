@@ -107,12 +107,28 @@ export class JobsPanel {
     return this.activeJob !== null;
   }
 
-  /** True while the camera is physically busy (so live view must pause). */
+  /** True while the camera is physically busy (so live view must pause).
+   *
+   * Not simply "a camera job is running": an align spends most of its life
+   * plate-solving in Docker with the camera idle and perfectly able to stream.
+   * Treating the whole job as busy blanked live view for the entire solve —
+   * ~15s staring at a paused stream with the camera visibly ready.
+   *
+   * The server is the authority (it keys off actual borrows of the camera); this
+   * is the client-side approximation, so lean towards resuming early. The stream
+   * skips frames by itself while the device really is held.
+   */
   get isExposing() {
     const job = this.activeJob;
     if (!job) return false;
     if (job.state === "awaiting_confirmation") return false; // shutter is idle
-    return ["capture", "align", "sequence"].includes(job.kind);
+    if (!["capture", "align", "sequence"].includes(job.kind)) return false;
+    // Align reports its phase; once past the frame it is solving, not shooting.
+    if (job.kind === "align") {
+      const label = job.progress?.label || "";
+      return /captur/i.test(label);
+    }
+    return true;
   }
 
   /** Enter handler, wired up in keys.js. Returns true if it consumed the key. */

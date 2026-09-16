@@ -19,9 +19,8 @@ from fastapi.responses import StreamingResponse
 
 from camera_orchestrator.application.camera_session import CameraSession
 from camera_orchestrator.domain.errors import CameraBusyError, CameraError
-from camera_orchestrator.interfaces.api.jobs import JobRegistry
 from camera_orchestrator.domain.models.camera import CameraStatus
-from camera_orchestrator.interfaces.api.deps import get_camera_session, get_registry
+from camera_orchestrator.interfaces.api.deps import get_camera_session
 from camera_orchestrator.interfaces.api.models import CameraStatusResponse, OkResponse
 from camera_orchestrator.log import get_logger
 
@@ -87,7 +86,6 @@ async def _mjpeg_frames(
     request: Request,
     session: CameraSession,
     first: bytes | None = None,
-    registry: JobRegistry | None = None,
 ) -> AsyncIterator[bytes]:
     """Yield multipart JPEG parts until the client leaves or live view stops.
 
@@ -102,11 +100,12 @@ async def _mjpeg_frames(
         yield _part(first)
         await asyncio.sleep(FRAME_INTERVAL_S)
     while not await request.is_disconnected():
-        if registry is not None and registry.camera_job_holding_device() is not None:
-            # A capture/align/sequence owns the body. Don't even reach for the
-            # device: between phases and during the card-listing reconnect poll
-            # the session lock is briefly free, and a preview slipping in there
-            # would re-open live view on the camera mid-run.
+        if session.in_use:
+            # Something is mid-operation on the body. Skip rather than contend.
+            # Keyed on actual camera use, NOT on job state: an align job spends
+            # most of its life plate-solving in Docker with the camera idle, and
+            # gating on "a camera job is running" blocked live view for the whole
+            # solve — ~15s of dead stream with the camera sitting ready.
             await asyncio.sleep(FRAME_INTERVAL_S)
             continue
         try:
@@ -126,7 +125,6 @@ async def _mjpeg_frames(
 async def liveview(
     request: Request,
     session: CameraSession = Depends(get_camera_session),
-    registry: JobRegistry = Depends(get_registry),
 ) -> StreamingResponse:
     """Motion-JPEG live view — drop straight into `<img src=...>`.
 
@@ -141,14 +139,14 @@ async def liveview(
     is transient, and the stream is supposed to survive one.
     """
     first: bytes | None = None
-    if registry.camera_job_holding_device() is None:
+    if not session.in_use:
         try:
             first = await anyio.to_thread.run_sync(
                 session.preview, SINGLE_PREVIEW_TIMEOUT_S)
         except CameraBusyError:
             pass  # a capture owns the camera; open the stream and pick up after it
     return StreamingResponse(
-        _mjpeg_frames(request, session, first, registry),
+        _mjpeg_frames(request, session, first),
         media_type=f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}",
         headers=_NO_STORE,
     )
@@ -157,15 +155,10 @@ async def liveview(
 @router.get("/frame.jpg")
 async def single_frame(
     session: CameraSession = Depends(get_camera_session),
-    registry: JobRegistry = Depends(get_registry),
 ) -> Response:
     """One live-view frame — the polling fallback where MJPEG is awkward."""
-    holder = registry.camera_job_holding_device()
-    if holder is not None:
-        raise CameraBusyError(
-            f"camera is busy with {holder.kind} job {holder.id} — live view is "
-            "locked out until it finishes"
-        )
+    if session.in_use:
+        raise CameraBusyError("camera is mid-operation — try again shortly")
     frame = await anyio.to_thread.run_sync(session.preview, SINGLE_PREVIEW_TIMEOUT_S)
     return Response(content=frame, media_type="image/jpeg", headers=_NO_STORE)
 

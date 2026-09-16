@@ -279,23 +279,6 @@ class JobRegistry:
             raise JobNotFoundError(f"no job with id '{job_id}'")
         return record
 
-    def camera_job_holding_device(self) -> Job | None:
-        """The camera job that currently owns the hardware, if any.
-
-        Deliberately excludes 'awaiting_confirmation': a sequence paused on the
-        lens-cap prompt has released the connection between phases, and live
-        view is *wanted* there — it is how you see the cap actually go on.
-
-        Used by the live-view routes to refuse before touching the device.
-        CameraSession's lock already makes concurrent access safe, but that lock
-        is only held for the frames themselves; between phases, and during the
-        card-listing reconnect poll, it is free. Without this check a preview
-        could slip in and re-open live view on the body mid-run.
-        """
-        with self._cond:
-            job = self._active_camera_job()
-        return job if job is not None and job.state == "running" else None
-
     def _active_camera_job(self) -> Job | None:
         """The camera job currently in flight, if any. Caller holds the lock."""
         for job_id in self._order:

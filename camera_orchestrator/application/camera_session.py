@@ -54,6 +54,11 @@ class CameraSession:
         """
         self._factory = camera_factory
         self._camera: Camera | None = None
+        # How many borrows are currently held. The lock alone cannot answer
+        # "is the camera actually in use right now?", and job state is the wrong
+        # proxy for it: an align job spends most of its life plate-solving, with
+        # the camera idle and perfectly able to stream live view.
+        self._depth = 0
         # Reentrant: a service may acquire while already holding the session on
         # the same thread (nested composition) without deadlocking.
         self._lock = threading.RLock()
@@ -64,6 +69,16 @@ class CameraSession:
     def is_open(self) -> bool:
         """True if an underlying camera connection is currently held."""
         return self._camera is not None
+
+    @property
+    def in_use(self) -> bool:
+        """True while some borrower holds the camera for an operation.
+
+        This is the honest answer to "can live view have a frame right now?" —
+        unlike job state, which stays 'running' through a plate solve that never
+        touches the hardware.
+        """
+        return self._depth > 0
 
     # -- access ------------------------------------------------------------
 
@@ -87,10 +102,12 @@ class CameraSession:
             raise CameraBusyError(
                 f"camera busy — not released within {timeout}s (capture in progress?)"
             )
+        self._depth += 1
         try:
             self._open()
             yield _CameraProxy(self)
         finally:
+            self._depth -= 1
             self._lock.release()
 
     def borrow(self) -> Camera:
@@ -181,14 +198,17 @@ class _CameraProxy(Camera):
 
     def __enter__(self) -> "Camera":
         self._session._lock.acquire()
+        self._session._depth += 1
         try:
             self._session._open()
         except BaseException:
+            self._session._depth -= 1
             self._session._lock.release()
             raise
         return self
 
     def __exit__(self, *exc) -> None:
+        self._session._depth -= 1
         self._session._lock.release()
 
     # -- delegation --------------------------------------------------------

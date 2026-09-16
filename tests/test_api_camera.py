@@ -16,7 +16,6 @@ from camera_orchestrator.config import Config
 from camera_orchestrator.domain.errors import CameraBusyError, CameraError
 from camera_orchestrator.interfaces.api.app import create_app
 from camera_orchestrator.interfaces.api.deps import get_camera_session
-from camera_orchestrator.interfaces.api.jobs import JobRegistry
 from camera_orchestrator.interfaces.api.routes_system import package_version
 from fastapi.testclient import TestClient
 
@@ -213,59 +212,94 @@ def test_reconnect_rebuilds_the_session():
     assert opens["n"] == 2                           # torn down and opened again
 
 
-def _running_camera_job(app, kind: str = "sequence"):
-    """Put a camera job into 'running' so the lockout has something to see."""
-    registry = app.state.jobs
-    started = threading.Event()
+def _job_holding_camera(app, session, kind: str = "sequence"):
+    """Submit a job that genuinely holds the camera, and wait until it does."""
+    held = threading.Event()
     release = threading.Event()
 
-    def blocks(ctx):
-        started.set()
-        release.wait(timeout=5)
+    def holds(ctx):
+        with session.acquire():        # a real borrow, as a capture would take
+            held.set()
+            release.wait(timeout=5)
         return None
 
-    registry.submit(kind, blocks)
-    started.wait(timeout=5)
+    app.state.jobs.submit(kind, holds)
+    held.wait(timeout=5)
     return release
 
 
-def test_single_frame_is_locked_out_while_a_camera_job_runs():
-    # CameraSession's lock only covers the frames themselves; between sequence
-    # phases and during the card-listing reconnect poll it is briefly free. A
-    # preview slipping into that window would re-open live view on the body
-    # mid-run, so the job-level check refuses before touching the device.
+def test_single_frame_is_locked_out_while_the_camera_is_held():
+    # Gated on an actual borrow rather than job state, so that a job which is
+    # running but not touching the hardware (an align mid-plate-solve) does not
+    # needlessly blank live view.
     session = CameraSession(camera_factory=lambda: MockCamera())
     app = create_app(Config())
     app.dependency_overrides[get_camera_session] = lambda: session
     client = TestClient(app)
 
-    release = _running_camera_job(app)
+    release = _job_holding_camera(app, session)
     try:
         assert client.get("/api/camera/frame.jpg").status_code == 503
     finally:
         release.set()
 
 
-def test_single_frame_works_again_once_the_job_finishes():
+def test_single_frame_works_again_once_the_camera_is_released():
     session = CameraSession(camera_factory=lambda: MockCamera())
     app = create_app(Config())
     app.dependency_overrides[get_camera_session] = lambda: session
     client = TestClient(app)
 
-    release = _running_camera_job(app)
+    release = _job_holding_camera(app, session)
     release.set()
-    for _ in range(50):                       # let the worker reach a terminal state
-        if app.state.jobs.camera_job_holding_device() is None:
+    for _ in range(50):                 # let the worker actually drop the borrow
+        if not session.in_use:
             break
         time.sleep(0.02)
 
-    assert client.get("/api/camera/frame.jpg").status_code == 200   # lock released
+    assert client.get("/api/camera/frame.jpg").status_code == 200
 
 
 def test_a_sequence_paused_on_the_lens_cap_does_not_lock_out_live_view():
-    # Deliberate: the shutter is idle while waiting on the cap, and seeing the
-    # cap go on is exactly what live view is for at that moment.
-    registry = JobRegistry()
-    job = registry.submit("sequence", lambda ctx: None)
-    registry._records[job.id].job.state = "awaiting_confirmation"
-    assert registry.camera_job_holding_device() is None
+    # The shutter is idle while waiting on the cap, and seeing the cap go on is
+    # exactly what live view is for at that moment. Nothing holds the camera
+    # between phases, so in_use answers this correctly with no special case.
+    session = CameraSession(camera_factory=lambda: MockCamera())
+    assert session.in_use is False
+
+
+def test_session_reports_in_use_only_while_a_borrow_is_held():
+    # The signal live view gates on. Must be false the instant the borrow ends,
+    # not for as long as some job is nominally "running".
+    session = CameraSession(camera_factory=lambda: MockCamera())
+    assert session.in_use is False
+    with session.acquire():
+        assert session.in_use is True                 # held
+    assert session.in_use is False                    # released immediately
+
+
+def test_solving_phase_does_not_block_live_view():
+    # An align captures, releases the camera, then plate-solves for ~15s. The
+    # camera is idle throughout the solve, so frame.jpg must still serve.
+    session = CameraSession(camera_factory=lambda: MockCamera())
+    app = create_app(Config())
+    app.dependency_overrides[get_camera_session] = lambda: session
+    client = TestClient(app)
+
+    solving = threading.Event()
+    release = threading.Event()
+
+    def align_like(ctx):
+        with session.acquire():       # the capture half — camera genuinely held
+            pass
+        solving.set()                 # now in the Docker solve; camera idle
+        release.wait(timeout=5)
+        return None
+
+    app.state.jobs.submit("align", align_like)
+    solving.wait(timeout=5)
+    try:
+        # Job is still "running", but the camera is free — this must not 503.
+        assert client.get("/api/camera/frame.jpg").status_code == 200
+    finally:
+        release.set()
