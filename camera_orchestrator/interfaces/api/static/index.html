@@ -137,34 +137,43 @@
           <input type="number" name="bulb_seconds" min="0" step="1" placeholder="—">
         </label>
 
-        <label class="field">
-          <span>Lights</span>
-          <input type="number" name="lights" min="0" step="1"
-                 aria-describedby="hint-lights">
-          <small id="hint-lights" class="field-hint">frames of the target</small>
-        </label>
 
-        <label class="field">
-          <span>Darks</span>
-          <input type="number" name="darks" min="0" step="1"
-                 aria-describedby="hint-darks">
-          <small id="hint-darks" class="field-hint">lens capped, same ISO + shutter</small>
-        </label>
+      </div>
 
-        <label class="field">
-          <span>Bias</span>
-          <input type="number" name="bias" min="0" step="1"
-                 aria-describedby="hint-bias">
-          <small id="hint-bias" class="field-hint">lens capped, fastest shutter</small>
-        </label>
+      <fieldset class="field-group">
+        <legend>Shots</legend>
+        <div class="field-grid field-grid-tight">
+          <label class="field">
+            <span>Lights</span>
+            <input type="number" name="lights" min="0" step="1"
+                   aria-describedby="hint-lights">
+            <small id="hint-lights" class="field-hint">frames of the target</small>
+          </label>
 
-        <label class="field">
-          <span>Flats</span>
-          <input type="number" name="flats" min="0" step="1"
-                 aria-describedby="hint-flats">
-          <small id="hint-flats" class="field-hint">evenly lit source — Capture only</small>
-        </label>
+          <label class="field">
+            <span>Darks</span>
+            <input type="number" name="darks" min="0" step="1"
+                   aria-describedby="hint-darks">
+            <small id="hint-darks" class="field-hint">lens capped, same ISO + shutter</small>
+          </label>
 
+          <label class="field">
+            <span>Bias</span>
+            <input type="number" name="bias" min="0" step="1"
+                   aria-describedby="hint-bias">
+            <small id="hint-bias" class="field-hint">lens capped, fastest shutter</small>
+          </label>
+
+          <label class="field">
+            <span>Flats</span>
+            <input type="number" name="flats" min="0" step="1"
+                   aria-describedby="hint-flats">
+            <small id="hint-flats" class="field-hint">evenly lit source — Capture only</small>
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="field-grid">
         <label class="field">
           <span>Image format</span>
           <select name="image_format" aria-describedby="hint-format">

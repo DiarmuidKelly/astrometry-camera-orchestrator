@@ -444,6 +444,25 @@ kbd {
   color: var(--text-dim);
 }
 .field-wide { grid-column: 1 / -1; }
+
+/* Shot counts, boxed off from the exposure settings above. These are the four
+   numbers that decide what Enter actually fires, so they read as one decision
+   rather than four inputs lost among ISO/shutter/aperture. */
+.field-group {
+  border: 1px solid var(--line-bright);
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem 0.7rem;
+  margin: 0.6rem 0;
+  min-inline-size: 0;            /* fieldsets otherwise refuse to shrink */
+}
+.field-group > legend {
+  padding: 0 0.4rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
+.field-grid-tight { margin: 0; }
 .field-check {
   flex-direction: row;
   align-items: center;
