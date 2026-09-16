@@ -35,6 +35,19 @@ const POLL_MS = 500;
 /** No decoded frame for this long and the stream is considered stalled. */
 const STALL_MS = 3000;
 
+/**
+ * Reopen attempts before reporting no live view, and the gap between them.
+ *
+ * A capture drops the mirror, which switches live view off on the body. When
+ * the job finishes we re-request the stream immediately, but the camera needs a
+ * moment to bring the mirror back up and restart the sensor feed — the first
+ * attempt fails with a 409 even though the camera is about to be fine. Without
+ * a retry that one failure stuck the UI on "No live view" until the user
+ * pressed Start again.
+ */
+const REOPEN_ATTEMPTS = 6;
+const REOPEN_DELAY_MS = 1000;
+
 // State copy. Report what is observed, not a guess at the cause — the observer
 // can see the rig and the log has the detail; inventing a diagnosis here just
 // sends them after the wrong thing.
@@ -80,6 +93,8 @@ export class LiveView {
     this.state = "idle";
     this._lastFrameAt = performance.now();
     this._sampleTimer = null;
+    this._reopenTimer = null;
+    this._reopenTries = 0;
     this._pollTimer = null;
 
     this._bindControls();
@@ -103,8 +118,11 @@ export class LiveView {
     this.running = false;
     clearInterval(this._sampleTimer);
     clearInterval(this._pollTimer);
+    clearTimeout(this._reopenTimer);   // don't reopen a stream we just stopped
     this._sampleTimer = null;
     this._pollTimer = null;
+    this._reopenTimer = null;
+    this._reopenTries = 0;
     // Blanking src is what actually closes the MJPEG connection; the backend
     // holds the camera open for as long as the socket is up.
     this.img.removeAttribute("src");
@@ -125,6 +143,7 @@ export class LiveView {
     }
     if (!this.running) return;
     this._lastFrameAt = performance.now();
+    this._reopenTries = 0;
     this._setState("connecting");
     this._loadSource();
   }
@@ -137,6 +156,7 @@ export class LiveView {
 
   _loadSource() {
     clearInterval(this._pollTimer);
+    clearTimeout(this._reopenTimer);
     if (this.mode === "poll") {
       const tick = () => {
         this.img.src = frameUrl();
@@ -153,10 +173,20 @@ export class LiveView {
   _bindStreamEvents() {
     this.img.addEventListener("error", () => {
       if (!this.running || this.busy) return;
+      if (this._reopenTries < REOPEN_ATTEMPTS) {
+        this._reopenTries += 1;
+        this._setState("connecting");
+        clearTimeout(this._reopenTimer);
+        this._reopenTimer = setTimeout(() => {
+          if (this.running && !this.busy) this._loadSource();
+        }, REOPEN_DELAY_MS);
+        return;
+      }
       this._setState("error");
     });
     this.img.addEventListener("load", () => {
       if (!this.running) return;
+      this._reopenTries = 0;                   // a frame arrived; start over
       this._lastFrameAt = performance.now();   // the one trustworthy signal
       if (this.state !== "live") this._setState("live");
     });
