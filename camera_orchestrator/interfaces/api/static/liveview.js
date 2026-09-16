@@ -40,27 +40,25 @@ const STALL_SAMPLES = 12;
 /** ~10s of history at 4 Hz — enough to see the peak as the ring turns past. */
 const HISTORY_SAMPLES = 40;
 
+// State copy. Report what is observed, not a guess at the cause — the observer
+// can see the rig and the log has the detail; inventing a diagnosis here just
+// sends them after the wrong thing.
 const STREAM_MESSAGES = {
-  idle: ["Live view stopped", "Press Start, or hit q to stop at any time."],
-  connecting: ["Connecting…", "Waiting for the first frame from the camera."],
+  idle: ["Live view stopped", "Press Start, or q to stop."],
+  connecting: ["Connecting…", "Waiting for the first frame."],
   live: ["Live", null],
   busy: [
-    "Capturing — live view paused",
-    "The mirror is down and the shutter is working, so the camera cannot "
-      + "preview. The stream resumes by itself when the job finishes.",
+    "Live view paused",
+    "A capture is using the camera. The stream resumes when the job finishes.",
   ],
   stalled: [
     "Stream stalled",
-    "No new frames are arriving. Live view may have been switched off on the "
-      + "body, or the camera has powered itself down — if so it cannot be woken "
-      + "over USB and needs a physical nudge (half-press the shutter).",
+    "No new frames received.",
   ],
   error: [
     "No live view",
-    "Enable live view on the camera body: Menu → Live View shooting → Enable, "
-      + "then press the Start/Stop button. The backend ends the stream whenever "
-      + "live view is off. If the body is dark it has auto-powered-off and must "
-      + "be woken by hand — USB cannot do it.",
+    "The camera is not returning preview frames. Live view must be enabled on "
+      + "the body: Menu → Live View shooting → Enable, then the Start/Stop button.",
   ],
 };
 

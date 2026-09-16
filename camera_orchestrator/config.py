@@ -67,7 +67,11 @@ class LoggingConfig(BaseModel):
     """Logging output configuration."""
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(default="INFO", description="Log verbosity. Overridden by LOG_LEVEL env var.")
-    format: Literal["text", "json"] = Field(default="text", description="Log format. 'json' emits one JSON object per line. Overridden by LOG_FORMAT env var.")
+    format: Literal["text", "json"] = Field(default="text", description="Log format for the console. 'json' emits one JSON object per line. Overridden by LOG_FORMAT env var.")
+    file: Optional[str] = Field(default="log.log", description="Rotating log file path, relative to where the app is run. Null disables file logging.")
+    file_format: Literal["text", "json"] = Field(default="text", description="Format for the log file, independent of the console.")
+    max_bytes: int = Field(default=5 * 1024 * 1024, description="Rotate the log file once it passes this size in bytes.")
+    backup_count: int = Field(default=5, description="How many rotated log files to keep.")
 
 
 class GrabConfig(BaseModel):

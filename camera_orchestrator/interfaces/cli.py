@@ -28,7 +28,7 @@ from camera_orchestrator.domain.models.align import AlignRequest
 from camera_orchestrator.domain.models.camera import CameraStatus, CaptureRequest
 from camera_orchestrator.domain.models.session import SequenceRequest
 from camera_orchestrator.domain.models.solve import SolveRecord
-from camera_orchestrator.log import get_logger
+from camera_orchestrator.log import get_logger, setup_file_logging
 
 log = get_logger("camera_orchestrator.batch")  # reconfigured after config load in main()
 
@@ -294,6 +294,8 @@ def cmd_serve(args: argparse.Namespace, cfg: Config) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="camera-orchestrator")
     parser.add_argument("--config", default="config.yaml", help="Config YAML path")
+    parser.add_argument("--log-file", default=None,
+                        help="Rotating log file path (default: logging.file from config, log.log)")
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -386,9 +388,21 @@ def main() -> None:
 
     cfg = Config.load(args.config)
 
+    # Before any logger is built, so every module's handler picks up the file.
+    log_file = getattr(args, "log_file", None) or cfg.logging.file
+    if log_file:
+        setup_file_logging(
+            log_file,
+            fmt=cfg.logging.file_format,
+            max_bytes=cfg.logging.max_bytes,
+            backup_count=cfg.logging.backup_count,
+        )
+
     global log
     log = get_logger("camera_orchestrator.batch",
                      fmt=cfg.logging.format, level=cfg.logging.level)
+    if log_file:
+        log.info("Logging to file", extra={"path": log_file})
 
     if args.command == "solve":
         if args.mode:

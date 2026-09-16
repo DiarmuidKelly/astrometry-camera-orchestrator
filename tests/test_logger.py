@@ -104,3 +104,38 @@ def test_add_file_handler(tmp_path):
     data = json.loads(content.strip())
     assert data["message"] == "written to file"
     assert data["key"] == "value"
+
+
+def test_setup_file_logging_writes_to_the_file(tmp_path):
+    from camera_orchestrator.log.logger import setup_file_logging
+    path = tmp_path / "log.log"
+    setup_file_logging(str(path), fmt="json")
+    log = get_logger("camera_orchestrator.test_filelog_a")
+    log.info("hello", extra={"frame": 3})
+
+    body = path.read_text()
+    assert '"message": "hello"' in body
+    assert '"frame": 3' in body                 # structured extras reach the file
+
+
+def test_setup_file_logging_catches_loggers_made_before_it(tmp_path):
+    # Startup order shouldn't matter: every module builds its logger at import
+    # time with propagate=False, so there is no shared parent to attach to.
+    from camera_orchestrator.log.logger import setup_file_logging
+    log = get_logger("camera_orchestrator.test_filelog_b")
+    path = tmp_path / "log.log"
+    setup_file_logging(str(path), fmt="json")
+    log.info("after the fact")
+    assert "after the fact" in path.read_text()
+
+
+def test_setup_file_logging_rotates(tmp_path):
+    from camera_orchestrator.log.logger import setup_file_logging
+    path = tmp_path / "log.log"
+    setup_file_logging(str(path), fmt="text", max_bytes=200, backup_count=2)
+    log = get_logger("camera_orchestrator.test_filelog_c")
+    for i in range(60):
+        log.info("a reasonably long line to push the file past the rotation size", extra={"i": i})
+
+    assert path.exists()
+    assert (tmp_path / "log.log.1").exists()    # rolled over rather than growing

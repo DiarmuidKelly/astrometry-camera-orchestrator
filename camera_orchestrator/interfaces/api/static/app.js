@@ -162,11 +162,11 @@ function main() {
     }
 
     if (cameraStatus && !cameraStatus.connected) {
+      // Show the driver's own message rather than guessing why. The observer is
+      // standing next to the rig and can see more than we can infer from here.
       liveView.setPrompt({
         title: "Camera not detected",
-        detail:
-          "If the body is dark it has auto-powered-off. It cannot be woken over "
-          + "USB — half-press the shutter on the camera, then hit Reconnect.",
+        detail: cameraStatus.error || "No camera is responding over USB.",
         tone: "warn",
       });
       return;
@@ -228,7 +228,7 @@ function main() {
         : "down";
       statusText.textContent = connected
         ? camera?.model || "Camera connected"
-        : "No camera — needs a physical nudge";
+        : "No camera detected";
       const bits = [];
       if (camera?.lens) bits.push(camera.lens);
       if (camera?.battery) bits.push(`battery ${camera.battery}`);

@@ -13,3 +13,4 @@ incoming/
 *.fits
 *.wcs
 tools/
+*.log
