@@ -4,7 +4,7 @@ Python tool for plate-solving astrophotography frames using a dockerised [astrom
 
 ## Examples
 
-**M31 Andromeda Galaxy** — 64 × 2s, ISO 3200, 200mm f/4, no tracking mount, Canon 5D Mark II. Stacked in Siril.
+**M31 Andromeda Galaxy** — 64 × 2s, ISO 3200, 200mm f/2.8, no tracking mount, Canon 5D Mark II. Stacked in Siril.
 
 ![Andromeda Galaxy](docs/images/20260914-andromeda.jpg)
 
@@ -168,7 +168,7 @@ card-only by default (fast for bulk sequences); `--download` transfers to `--out
 
 ```bash
 uv run camera-orchestrator capture --status
-   --count 30                 # 30 subs to the card
+uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30                 # 30 subs to the card
 uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30 --download      # download each frame
 uv run camera-orchestrator capture --bulb 30 --count 20 --download                  # 30s bulb subs
 ```

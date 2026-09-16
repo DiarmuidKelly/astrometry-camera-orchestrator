@@ -33,6 +33,11 @@ CameraFactory = Callable[[], Camera]
 # Called after each frame: (index, total, downloaded_paths_this_frame).
 FrameCallback = Callable[[int, int, list[Path]], None]
 
+# Forces the backend to drop and rebuild its connection. Only needed when the
+# factory hands out a *shared* session (see application/camera_session.py); a
+# factory that opens a fresh camera per call already reconnects implicitly.
+ReconnectHook = Callable[[], None]
+
 # Filename extensions for each `select` mode (a shot's files are named by the camera).
 _SELECT_EXTS = {"jpeg": (".jpg", ".jpeg"), "cr2": (".cr2",)}
 
@@ -48,13 +53,24 @@ def _select_files(refs: list[CameraFile], mode: str) -> list[CameraFile]:
 class CaptureService:
     """Runs status and capture workflows against a camera backend."""
 
-    def __init__(self, camera_factory: CameraFactory):
+    def __init__(
+        self,
+        camera_factory: CameraFactory,
+        on_reconnect: ReconnectHook | None = None,
+    ):
         """Args:
             camera_factory: Zero-arg callable returning an open Camera. The
                 composition root injects the concrete adapter (GphotoCamera);
                 tests inject a mock. The service never imports an adapter.
+            on_reconnect: Optional hook forcing the backend to rebuild its
+                connection, called between card-listing polls. Required when
+                `camera_factory` borrows from a shared session — that hands back
+                the *same* connection, whose directory listing is cached, so
+                without this the card poll would never see new files. Leave None
+                for a factory that opens a fresh camera per call.
         """
         self._camera_factory = camera_factory
+        self._on_reconnect = on_reconnect
 
     def status(self) -> CameraStatus:
         """Open the camera and return a status snapshot."""
@@ -173,6 +189,8 @@ class CaptureService:
         new: list[str] = []
         for attempt in range(attempts):
             try:
+                if self._on_reconnect is not None:
+                    self._on_reconnect()  # shared session: force a real reconnect
                 with self._camera_factory() as lister:
                     new = sorted(
                         f.name for f in lister.list_files() if f.name not in before_names
