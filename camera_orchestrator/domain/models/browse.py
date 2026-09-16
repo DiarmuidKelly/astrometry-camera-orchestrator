@@ -31,6 +31,19 @@ class FileEntry(BaseModel):
     kind: FileKind = Field(description="Coarse file class derived from the name/suffix: raw, jpeg, solved_sidecar, preview, manifest or other.")
 
 
+class DirectoryEntry(BaseModel):
+    """One plain (non-session) subdirectory, as a browser needs it to navigate.
+
+    Carries the absolute `path` as well as the display `name`: a UI clicking a
+    folder has to hand a path back to `/api/browse`, and rebuilding one by string
+    concatenation in the client would guess wrong the moment the browse root is
+    not the parent of what is being listed.
+    """
+
+    name: str = Field(description="Basename of the directory, e.g. 'annotated'.")
+    path: str = Field(description="Absolute path of the directory on the host.")
+
+
 class FrameCounts(BaseModel):
     """Frames recorded in a manifest, summed across repeated phases of a kind."""
 
@@ -52,7 +65,7 @@ class SessionEntry(BaseModel):
     has_manifest: bool = Field(description="True if a session.json is present in the folder.")
     manifest_readable: bool = Field(description="True if that session.json parsed. False means a half-written/corrupt manifest — the folder is still listed, with counts zeroed.")
     download: bool = Field(default=False, description="Manifest's download flag: True if frames were transferred to disk, False if they stayed on the card.")
-    target: Optional[TargetInfo] = Field(default=None, description="Solved pointing from `align`, if this session has one. None when no align ran or the manifest is unreadable.")
+    target: Optional[TargetInfo] = Field(default=None, description="Solved pointing from `align`, if this session has one. None when no align ran or the manifest is unreadable. Its `preview`/`frame` are absolute paths here, not the manifest's session-relative basenames, so a client can fetch them directly.")
     started_at: Optional[datetime] = Field(default=None, description="UTC start of the first sequence run, from the manifest.")
     ended_at: Optional[datetime] = Field(default=None, description="UTC end of the last sequence run, from the manifest.")
     frames: FrameCounts = Field(default_factory=FrameCounts, description="Recorded frame counts aggregated by kind across all phases.")
@@ -62,7 +75,7 @@ class SessionEntry(BaseModel):
     files_present: int = Field(default=0, description="How many of those recorded filenames actually exist in the session folder. 0 for a card-only run.")
     files_on_disk: int = Field(default=0, description="Total files present in the session folder (one level deep), manifest included.")
     bytes_on_disk: int = Field(default=0, description="Total size in bytes of the files present in the session folder.")
-    subdirectories: list[str] = Field(default_factory=list, description="Names of any nested directories inside the session folder (not descended into).")
+    subdirectories: list[DirectoryEntry] = Field(default_factory=list, description="Nested directories inside the session folder (not descended into), each with its name and absolute path — same shape as DirectoryListing.directories so a UI can navigate into either.")
 
 
 class DirectoryListing(BaseModel):
@@ -74,4 +87,4 @@ class DirectoryListing(BaseModel):
     parent: Optional[str] = Field(default=None, description="Absolute path of the parent directory, or None when this is the root (there is nothing above it to browse).")
     sessions: list[SessionEntry] = Field(default_factory=list, description="Session folders directly inside, newest first.")
     files: list[FileEntry] = Field(default_factory=list, description="Loose files directly inside, sorted by name.")
-    directories: list[str] = Field(default_factory=list, description="Names of non-session subdirectories directly inside.")
+    directories: list[DirectoryEntry] = Field(default_factory=list, description="Non-session subdirectories directly inside, each with its name and absolute path.")

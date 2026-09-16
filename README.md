@@ -279,6 +279,26 @@ Integration tests require Docker and astrometry index files:
 make test-integration
 ```
 
+## Deployment (Docker)
+
+A container image is provided for **dependency reproducibility** — `rawpy`,
+`gphoto2` and `opencv` are the awkward wheels, and the image builds them from the
+committed `uv.lock`:
+
+```bash
+make docker-build    # build camera-orchestrator:dev
+make docker-shell    # poke around inside it
+```
+
+Use it for plate-solving (`batch`, `solve`) and CI. **Camera work stays native.**
+gphoto2 claims USB exclusively and the adapter must release the desktop's gvfs
+mount over the session D-Bus first, which a container cannot do — so `capture`,
+`align`, `sequence`, `grab`, live view and the API server all run via `uv run`.
+
+The decision table, the full USB-in-container reasoning and the Docker-in-Docker
+caveat for the solver are in
+[`docs/20260916-deployment.md`](docs/20260916-deployment.md).
+
 ## Status
 
 Batch solving works and has been tested against JPEG and CR2 files. Tethered

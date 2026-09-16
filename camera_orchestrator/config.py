@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from pathlib import Path
 from typing import Literal, Optional
 
 import yaml
@@ -74,3 +76,35 @@ class Config(BaseModel):
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
         return cls.model_validate(data)
+
+    def save(self, path: str) -> str:
+        """Write this config back to a YAML file.
+
+        Written atomically (temp file in the same directory, then replaced) so a
+        crash mid-write can't leave a truncated config — losing solver.index_dir
+        or optics.sensor_width_mm silently degrades every later solve rather than
+        erroring, so a half-written file is worse than no write at all.
+
+        Args:
+            path: Destination YAML path. Parent directories are created.
+
+        Returns:
+            The path written.
+        """
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        payload = yaml.safe_dump(
+            self.model_dump(mode="json"),
+            sort_keys=False,
+            default_flow_style=False,
+        )
+        # Same directory so os.replace stays on one filesystem (atomic rename).
+        with tempfile.NamedTemporaryFile(
+            "w", dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp", delete=False
+        ) as tmp:
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_path = tmp.name
+        os.replace(tmp_path, dest)
+        return str(dest)

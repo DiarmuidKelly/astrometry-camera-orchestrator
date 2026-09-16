@@ -23,13 +23,14 @@ from pathlib import Path
 
 from camera_orchestrator.application.sequence_service import request_name
 from camera_orchestrator.domain.models.browse import (
+    DirectoryEntry,
     DirectoryListing,
     FileEntry,
     FileKind,
     FrameCounts,
     SessionEntry,
 )
-from camera_orchestrator.domain.models.session import PhaseKind, SessionManifest
+from camera_orchestrator.domain.models.session import PhaseKind, SessionManifest, TargetInfo
 from camera_orchestrator.domain.ports.session_manifest import SessionManifestRepository
 
 MANIFEST_NAME = "session.json"
@@ -89,12 +90,12 @@ class BrowseService:
         """One level of a directory: its sessions, loose files and other folders."""
         directory = self._require_dir(path)
         sessions: list[SessionEntry] = []
-        directories: list[str] = []
+        directories: list[DirectoryEntry] = []
         for child in _subdirectories(directory):
             if _is_session_dir(child):
                 sessions.append(self._describe_session(child))
             else:
-                directories.append(child.name)
+                directories.append(_directory_entry(child))
         return DirectoryListing(
             path=str(directory),
             name=directory.name,
@@ -102,7 +103,7 @@ class BrowseService:
             parent=None if directory == self._root else str(directory.parent),
             sessions=_newest_first(sessions),
             files=[_file_entry(f) for f in _files(directory)],
-            directories=sorted(directories),
+            directories=sorted(directories, key=lambda d: d.name),
         )
 
     def describe_session(self, path: str) -> SessionEntry:
@@ -143,7 +144,7 @@ class BrowseService:
             has_manifest=(directory / MANIFEST_NAME).is_file(),
             manifest_readable=manifest is not None,
             download=manifest.download if manifest is not None else False,
-            target=manifest.target if manifest is not None else None,
+            target=_resolved_target(manifest, directory),
             started_at=manifest.started_at if manifest is not None else None,
             ended_at=manifest.ended_at if manifest is not None else None,
             frames=counts,
@@ -153,7 +154,7 @@ class BrowseService:
             files_present=sum(1 for n in recorded if n in on_disk),
             files_on_disk=len(on_disk),
             bytes_on_disk=sum(f.stat().st_size for f in on_disk.values()),
-            subdirectories=sorted(c.name for c in _subdirectories(directory)),
+            subdirectories=[_directory_entry(c) for c in _subdirectories(directory)],
         )
 
     def _load_manifest(self, directory: Path) -> SessionManifest | None:
@@ -201,6 +202,36 @@ def _scan(directory: Path) -> list[Path]:
         return [Path(e.path) for e in os.scandir(directory)]
     except OSError:
         return []
+
+
+def _resolved_target(manifest: SessionManifest | None, directory: Path) -> TargetInfo | None:
+    """The manifest's target with `preview`/`frame` as paths a client can fetch.
+
+    A manifest stores them as bare basenames relative to the session folder
+    (`align` writes 'IMG_3897_solved.png'). A browser only ever sees the folder
+    the name came from via this listing, so handing back the basename makes the
+    preview unfetchable — it would be looked up against the browse root instead
+    and 404. Absolutising here keeps the manifest format untouched while making
+    the browse view self-contained.
+    """
+    if manifest is None or manifest.target is None:
+        return None
+    return manifest.target.model_copy(update={
+        "preview": _in_session(manifest.target.preview, directory),
+        "frame": _in_session(manifest.target.frame, directory),
+    })
+
+
+def _in_session(name: str | None, directory: Path) -> str | None:
+    """Absolutise a manifest basename against its session folder."""
+    if not name:
+        return None
+    return str(directory / name)
+
+
+def _directory_entry(path: Path) -> DirectoryEntry:
+    """A subdirectory as name + absolute path, so a UI can navigate straight into it."""
+    return DirectoryEntry(name=path.name, path=str(path))
 
 
 def _file_entry(path: Path) -> FileEntry:

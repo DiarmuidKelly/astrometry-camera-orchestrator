@@ -1,0 +1,38 @@
+# Compose v2 (`docker compose`, not `docker-compose`).
+#
+# ONE service, and it is deliberately the non-camera one: plate-solving.
+# There is no camera service here. gphoto2 needs exclusive USB and the adapter
+# releases the host's gvfs mount over the session D-Bus before claiming it
+# (camera_orchestrator/adapters/camera/gvfs.py:19) — a container cannot do that.
+# Run capture / align / sequence / live view / the API natively with `uv run`.
+# Full reasoning: docs/20260916-deployment.md.
+#
+# Host paths are MIRRORED (host path == container path) on purpose. DockerSolver
+# shells out to `docker run` and its bind mounts are resolved by the host daemon,
+# so a container-only path silently mounts an empty directory and the solve
+# returns "no solution". Mirroring keeps both sides in agreement.
+#
+# Required env (put in a .env next to this file):
+#   ASTROMETRY_INDEX_DIR=/path/to/astrometry-index-files
+#   DOCKER_GID=$(getent group docker | cut -d: -f3)
+
+services:
+  solve:
+    image: camera-orchestrator:dev
+    build:
+      context: .
+    working_dir: ${PWD}
+    environment:
+      # tempfile honours TMPDIR; DockerSolver bind-mounts its temp work dir, so
+      # that dir must exist at the same path on the host.
+      TMPDIR: /tmp/camera-orchestrator
+    volumes:
+      - ${PWD}:${PWD}
+      - ${ASTROMETRY_INDEX_DIR:?set ASTROMETRY_INDEX_DIR in .env}:${ASTROMETRY_INDEX_DIR}
+      - /tmp/camera-orchestrator:/tmp/camera-orchestrator
+      # Root-equivalent access to the host. Only needed because DockerSolver
+      # launches the solver container itself. See the doc before enabling.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID in .env}"
+    command: ["--help"]

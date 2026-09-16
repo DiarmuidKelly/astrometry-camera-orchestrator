@@ -65,3 +65,44 @@ def test_full_yaml(tmp_path):
     assert cfg.optics.focal_mm == 200.0
     assert cfg.search.ra_deg == 277.5
     assert cfg.location.lat == 47.45
+
+
+def test_save_round_trips_through_load(tmp_path):
+    cfg = Config.load(None)
+    cfg.search.ra_deg = 10.68          # M31 — the values a UI would submit
+    cfg.search.dec_deg = 41.27
+    cfg.optics.sensor_width_mm = 35.8
+
+    dest = cfg.save(str(tmp_path / "config.yaml"))
+    reloaded = Config.load(dest)
+
+    assert reloaded.search.ra_deg == 10.68
+    assert reloaded.search.dec_deg == 41.27
+    assert reloaded.optics.sensor_width_mm == 35.8
+
+
+def test_save_preserves_nulls(tmp_path):
+    # focal_mm must stay null so EXIF keeps winning; a UI round-trip that
+    # silently coerced it to 0.0 would skew every later scale hint.
+    cfg = Config.load(None)
+    dest = cfg.save(str(tmp_path / "config.yaml"))
+    assert Config.load(dest).optics.focal_mm is None
+
+
+def test_save_creates_parent_directories(tmp_path):
+    cfg = Config.load(None)
+    dest = cfg.save(str(tmp_path / "nested" / "dir" / "config.yaml"))
+    assert Config.load(dest).solver.mode == "accurate"
+
+
+def test_save_overwrites_atomically(tmp_path):
+    path = tmp_path / "config.yaml"
+    Config.load(None).save(str(path))
+
+    cfg = Config.load(str(path))
+    cfg.search.ra_deg = 297.70
+    cfg.save(str(path))
+
+    assert Config.load(str(path)).search.ra_deg == 297.70
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name != "config.yaml"]
+    assert leftovers == []                 # temp file replaced, not left behind

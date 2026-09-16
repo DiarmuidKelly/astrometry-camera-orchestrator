@@ -180,6 +180,35 @@ def test_align_only_session_has_target_and_no_phases(tmp_path):
     assert entry.session_date.isoformat() == "2026-09-14"       # parsed from the folder prefix
 
 
+def test_target_preview_and_frame_come_back_as_resolvable_paths(tmp_path):
+    """The manifest stores basenames; a browse client only has the listing.
+
+    A bare 'IMG_3797_solved.png' resolves against the browse *root*, not the
+    session folder, so a UI putting it straight into an <img> gets a 404.
+    """
+    manifest = _manifest("20260914-andromeda", phases=[],
+                         target=TargetInfo(solved=True, preview="IMG_3797_solved.png",
+                                           frame="IMG_3797.JPG"))
+    d = _session_dir(tmp_path, "20260914-andromeda", manifest,
+                     files=["IMG_3797_solved.png", "IMG_3797.JPG"])
+
+    svc = _svc(tmp_path)
+    target = svc.list_sessions()[0].target
+    assert target.preview == str(d / "IMG_3797_solved.png")
+    assert target.frame == str(d / "IMG_3797.JPG")
+    # And the path survives confinement, i.e. it is fetchable via /api/files/raw.
+    assert svc.resolve(target.preview).is_file()
+
+
+def test_target_preview_stays_none_when_the_align_never_solved(tmp_path):
+    _session_dir(tmp_path, "20260914-orion",
+                 _manifest("20260914-orion", phases=[],
+                           target=TargetInfo(solved=False, frame="IMG_1.JPG")))
+
+    target = _svc(tmp_path).list_sessions()[0].target
+    assert target.solved is False and target.preview is None   # nothing to render
+
+
 def test_sequence_without_align_has_null_target(tmp_path):
     _session_dir(tmp_path, "20260914-orion",
                  _manifest("20260914-orion", phases=[_phase("light", 5)]))
@@ -204,7 +233,8 @@ def test_nested_stray_directory_is_reported_not_descended(tmp_path):
     (d / "rejects" / "IMG_bad.CR2").write_bytes(b"x" * 10)
 
     entry = _svc(tmp_path).describe_session(str(d))
-    assert entry.subdirectories == ["rejects"]
+    assert [s.name for s in entry.subdirectories] == ["rejects"]
+    assert entry.subdirectories[0].path == str(d / "rejects")   # navigable, not just a label
     assert entry.files_on_disk == 2      # IMG_1.CR2 + session.json — the nested file is not counted
 
 
@@ -221,7 +251,23 @@ def test_plain_directory_is_not_a_session(tmp_path):
     (tmp_path / "tools").mkdir()
 
     listing = _svc(tmp_path).list_directory()
-    assert listing.directories == ["tools"] and listing.sessions == []
+    assert [d.name for d in listing.directories] == ["tools"] and listing.sessions == []
+
+
+def test_plain_directory_carries_an_absolute_path_the_ui_can_browse_to(tmp_path):
+    """The browser navigates by handing `path` straight back to list_directory().
+
+    A bare name would force the client to rebuild the path by concatenation, which
+    guesses wrong as soon as the listed folder is not the browse root itself.
+    """
+    nested = tmp_path / "raw-dumps"
+    (nested / "annotated").mkdir(parents=True)
+
+    entry = _svc(tmp_path).list_directory(str(nested)).directories[0]
+    assert entry.name == "annotated"
+    assert entry.path == str(nested / "annotated")
+    # And the path round-trips: feeding it back lists that directory.
+    assert _svc(tmp_path).list_directory(entry.path).path == str(nested / "annotated")
 
 
 def test_listing_a_session_folder_shows_its_files(tmp_path):

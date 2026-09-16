@@ -12,6 +12,7 @@ from camera_orchestrator.adapters.solvers.docker import DockerSolver
 from camera_orchestrator.adapters.storage.session_manifest import SidecarSessionRepository
 from camera_orchestrator.adapters.storage.sidecar import SidecarSolveRepository
 from camera_orchestrator.application.align_service import AlignService
+from camera_orchestrator.application.browse_service import BrowseService
 from camera_orchestrator.application.camera_session import CameraSession
 from camera_orchestrator.application.capture_service import CaptureService
 from camera_orchestrator.application.sequence_service import SequenceService
@@ -106,3 +107,24 @@ def build_align_service(cfg: Config) -> AlignService:
 def build_sequence_service() -> SequenceService:
     """SequenceService wired with the capture service and manifest repo."""
     return SequenceService(build_capture_service(), build_session_repository())
+
+
+def build_shared_align_service(cfg: Config) -> AlignService:
+    """AlignService on the shared session — the variant a long-lived server wants.
+
+    build_align_service() opens a fresh connection per call, which collides with
+    a live-view stream ("Could not claim the USB device"). Same service, shared
+    capture backend.
+    """
+    return AlignService(build_shared_capture_service(), lambda: build_solver(cfg), cfg,
+                        build_session_repository())
+
+
+def build_shared_sequence_service() -> SequenceService:
+    """SequenceService on the shared session (safe alongside live view)."""
+    return SequenceService(build_shared_capture_service(), build_session_repository())
+
+
+def build_browse_service(cfg: Config) -> BrowseService:
+    """BrowseService confined to the configured capture root (grab.out_dir)."""
+    return BrowseService(build_session_repository(), cfg.grab.out_dir)

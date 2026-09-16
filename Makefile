@@ -13,6 +13,9 @@ help:
 	@echo "  make fmt                     ruff format"
 	@echo "  make clean                   remove venv and build artefacts"
 	@echo ""
+	@echo "  make docker-build            build the image (solving/CI — not camera work)"
+	@echo "  make docker-shell            interactive shell in the image"
+	@echo ""
 	@echo "  app usage: uv run camera-orchestrator --help"
 
 .PHONY: install
@@ -47,6 +50,19 @@ test-integration: setup-integration
 .PHONY: test-all
 test-all:
 	uv run pytest tests/ -v --cov=camera_orchestrator
+
+# Container image — dependency reproducibility for plate-solving and CI.
+# Camera work (capture/align/sequence/live view) stays native: see
+# docs/20260916-deployment.md.
+DOCKER_IMAGE ?= camera-orchestrator:dev
+
+.PHONY: docker-build
+docker-build:
+	docker build -t $(DOCKER_IMAGE) .
+
+.PHONY: docker-shell
+docker-shell:
+	docker run --rm -it --entrypoint bash $(DOCKER_IMAGE)
 
 .PHONY: clean
 clean:

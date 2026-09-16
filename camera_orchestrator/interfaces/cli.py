@@ -7,6 +7,7 @@ results; they contain no camera or solving logic themselves.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -263,6 +264,33 @@ def cmd_solve(args: argparse.Namespace, cfg: Config) -> None:
         sys.exit(1)
 
 
+def cmd_serve(args: argparse.Namespace, cfg: Config) -> None:
+    """Run the web UI + JSON API under uvicorn until interrupted.
+
+    Imported lazily: fastapi/uvicorn are only needed for this one verb, and
+    every other command should start without paying for the import.
+    """
+    import uvicorn
+
+    from camera_orchestrator.interfaces.api import create_app
+
+    log.info("Serving web UI", extra={"host": args.host, "port": args.port,
+                                      "url": f"http://{args.host}:{args.port}/"})
+    if args.reload:
+        # --reload needs an import string so the reloader can re-import the app
+        # in its child process; the config path travels via the environment.
+        from camera_orchestrator.interfaces.api.app import CONFIG_ENV_VAR
+
+        os.environ[CONFIG_ENV_VAR] = args.config
+        uvicorn.run("camera_orchestrator.interfaces.api.app:reloadable_app",
+                    host=args.host, port=args.port, reload=True, factory=True,
+                    log_level=cfg.logging.level.lower())
+        return
+
+    uvicorn.run(create_app(cfg, config_path=args.config), host=args.host, port=args.port,
+                log_level=cfg.logging.level.lower())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="camera-orchestrator")
     parser.add_argument("--config", default="config.yaml", help="Config YAML path")
@@ -340,6 +368,16 @@ def build_parser() -> argparse.ArgumentParser:
     seq.add_argument("--download", action="store_true",
                      help="Transfer frames over USB to the session folder (default: shoot to the card only)")
 
+    srv = sub.add_parser("serve", help="Serve the web UI and JSON API")
+    srv.add_argument("--host", default="127.0.0.1",
+                     help="Interface to bind (default: 127.0.0.1, this machine only). "
+                          "Use --host 0.0.0.0 to expose it to the LAN so a phone at the "
+                          "scope can reach it — there is no authentication, so only do "
+                          "that on a network you trust.")
+    srv.add_argument("--port", type=int, default=8000, help="Port to listen on (default: 8000)")
+    srv.add_argument("--reload", action="store_true",
+                     help="Reload on source changes (development only)")
+
     return parser
 
 
@@ -364,6 +402,8 @@ def main() -> None:
         cmd_align(args, cfg)
     elif args.command == "sequence":
         cmd_sequence(args, cfg)
+    elif args.command == "serve":
+        cmd_serve(args, cfg)
     elif args.command == "batch":
         # --mode / --cpulimit are passed through to the service, which copies the
         # config rather than mutating this shared one.
