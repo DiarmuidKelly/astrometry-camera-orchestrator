@@ -1,6 +1,6 @@
 /*
- * liveview.js — MJPEG live view with digital zoom, pan, a focus score and the
- * onscreen action prompt.
+ * liveview.js — MJPEG live view with digital zoom, pan and the onscreen
+ * action prompt.
  *
  * This is the product. The loop it serves is: aim → zoom in on a star → turn
  * the focus ring by hand → press Enter to fire. So:
@@ -10,16 +10,14 @@
  *  - Zoom/pan is a pure CSS transform on that <img> inside an overflow:hidden
  *    viewport. No re-request, no round trip — instant response, which matters
  *    when you are nudging a focus ring and watching for a change.
- *  - The focus score reads pixels back off the same <img> through an off-screen
- *    canvas (focus.js), over the VISIBLE CROP only — the user zoomed into one
- *    star for precisely this reason.
+ *  - Clicking the frame centres on that point, so an edge star can be zoomed
+ *    into directly rather than zoomed-then-hunted-for.
  *  - A prompt line always says what Enter will do, or what the camera is doing.
  *
  * Keyboard handling lives in keys.js; this class exposes the verbs it calls.
  */
 
 import { frameUrl, liveViewUrl } from "./api.js";
-import { FocusHistory, FocusMeter, formatScore } from "./focus.js";
 import { qs } from "./util.js";
 
 /**
@@ -28,17 +26,14 @@ import { qs } from "./util.js";
  */
 const CROP_STEPS = [1.0, 0.75, 0.5, 0.33, 0.25];
 
-/** How often to compute a focus score. 4 Hz: responsive, negligible CPU. */
-const SAMPLE_MS = 250;
+/** How often to check whether frames are still arriving. */
+const SAMPLE_MS = 500;
 
 /** Poll interval for the single-frame fallback path. */
 const POLL_MS = 500;
 
-/** Consecutive identical scores before we call the stream stalled (~3s). */
-const STALL_SAMPLES = 12;
-
-/** ~10s of history at 4 Hz — enough to see the peak as the ring turns past. */
-const HISTORY_SAMPLES = 40;
+/** No decoded frame for this long and the stream is considered stalled. */
+const STALL_MS = 3000;
 
 // State copy. Report what is observed, not a guess at the cause — the observer
 // can see the rig and the log has the detail; inventing a diagnosis here just
@@ -75,14 +70,7 @@ export class LiveView {
     this.promptDetailEl = qs("[data-prompt-detail]", root);
     this.promptBar = qs("[data-prompt-bar]", root);
     this.promptBarFill = qs("[data-prompt-bar-fill]", root);
-    this.scoreEl = qs("[data-focus-score]", root);
-    this.peakEl = qs("[data-focus-peak]", root);
-    this.peakBar = qs("[data-focus-bar]", root);
-    this.sparkline = qs("[data-focus-spark]", root);
     this.zoomLabel = qs("[data-zoom-label]", root);
-
-    this.meter = new FocusMeter();
-    this.history = new FocusHistory(HISTORY_SAMPLES);
 
     this.cropIndex = 0;
     this.centre = { x: 0.5, y: 0.5 }; // normalised pan centre
@@ -90,8 +78,7 @@ export class LiveView {
     this.mode = "stream"; // "stream" | "poll"
     this.busy = false; // set by the job layer while the shutter is working
     this.state = "idle";
-    this._identicalCount = 0;
-    this._lastSignature = null;
+    this._lastFrameAt = performance.now();
     this._sampleTimer = null;
     this._pollTimer = null;
 
@@ -106,11 +93,10 @@ export class LiveView {
   start() {
     this.running = true;
     this._setState("connecting");
-    this._identicalCount = 0;
-    this._lastSignature = null;
+    this._lastFrameAt = performance.now();
     this._loadSource();
     clearInterval(this._sampleTimer);
-    this._sampleTimer = setInterval(() => this._sample(), SAMPLE_MS);
+    this._sampleTimer = setInterval(() => this._checkLiveness(), SAMPLE_MS);
   }
 
   stop() {
@@ -138,8 +124,7 @@ export class LiveView {
       return;
     }
     if (!this.running) return;
-    this._identicalCount = 0;
-    this._lastSignature = null;
+    this._lastFrameAt = performance.now();
     this._setState("connecting");
     this._loadSource();
   }
@@ -172,6 +157,7 @@ export class LiveView {
     });
     this.img.addEventListener("load", () => {
       if (!this.running) return;
+      this._lastFrameAt = performance.now();   // the one trustworthy signal
       if (this.state !== "live") this._setState("live");
     });
   }
@@ -236,26 +222,46 @@ export class LiveView {
   zoomReset() {
     this.centre = { x: 0.5, y: 0.5 };
     this.cropIndex = 0;
-    this.history.reset();
     this._applyTransform();
-    this._render();
   }
 
-  resetFocus() {
-    this.history.reset();
-    this._render();
+
+  /**
+   * Normalised frame coords (0..1) under a pointer event.
+   * The <img> fills the viewport, so viewport-relative position maps straight
+   * onto the *visible* crop, which then maps back into the full frame.
+   */
+  pointToFrame(event) {
+    const rect = this.viewport.getBoundingClientRect();
+    const fx = (event.clientX - rect.left) / (rect.width || 1);
+    const fy = (event.clientY - rect.top) / (rect.height || 1);
+    return {
+      x: this.centre.x + (fx - 0.5) * this.crop,
+      y: this.centre.y + (fy - 0.5) * this.crop,
+    };
   }
 
-  setZoomIndex(index) {
-    const clamped = Math.max(0, Math.min(CROP_STEPS.length - 1, index));
-    if (clamped === this.cropIndex) return;
-    this.cropIndex = clamped;
-    // A different crop samples different pixels, so past scores are no longer
-    // comparable. Dropping the history avoids a misleading peak.
-    this.history.reset();
+  /** Centre the view on a normalised frame point — click a star to inspect it. */
+  focusOn(point) {
+    this.centre.x = point.x;
+    this.centre.y = point.y;
     this._clampCentre();
     this._applyTransform();
-    this._render();
+  }
+
+  setZoomIndex(index, anchor = null) {
+    const clamped = Math.max(0, Math.min(CROP_STEPS.length - 1, index));
+    if (clamped === this.cropIndex) return;
+    // Zooming about a given frame point rather than the middle: stars worth
+    // checking focus on are often at the edge, and centre-anchored zoom means
+    // zooming in then hunting for them by drag.
+    if (anchor) {
+      this.centre.x = anchor.x;
+      this.centre.y = anchor.y;
+    }
+    this.cropIndex = clamped;
+    this._clampCentre();
+    this._applyTransform();
   }
 
   /** Pan by whole steps; ±1 is 5% of the visible crop. */
@@ -266,7 +272,6 @@ export class LiveView {
     this.centre.y += dy * step;
     this._clampCentre();
     this._applyTransform();
-    this.history.reset();
   }
 
   _clampCentre() {
@@ -297,7 +302,6 @@ export class LiveView {
     qs("[data-zoom-in]", this.root).addEventListener("click", () => this.zoomIn());
     qs("[data-zoom-out]", this.root).addEventListener("click", () => this.zoomOut());
     qs("[data-zoom-reset]", this.root).addEventListener("click", () => this.zoomReset());
-    qs("[data-focus-reset]", this.root).addEventListener("click", () => this.resetFocus());
   }
 
   _bindPan() {
@@ -305,8 +309,15 @@ export class LiveView {
     let lastX = 0;
     let lastY = 0;
 
+    let downX = 0;
+    let downY = 0;
+    let moved = false;
+
     const begin = (event) => {
-      if (this.scale === 1) return;
+      downX = event.clientX;
+      downY = event.clientY;
+      moved = false;
+      if (this.scale === 1) return;   // nothing to pan, but still track the tap
       dragging = true;
       lastX = event.clientX;
       lastY = event.clientY;
@@ -315,6 +326,7 @@ export class LiveView {
     };
 
     const move = (event) => {
+      if (Math.hypot(event.clientX - downX, event.clientY - downY) > 4) moved = true;
       if (!dragging) return;
       const w = this.img.clientWidth || 1;
       const h = this.img.clientHeight || 1;
@@ -326,16 +338,22 @@ export class LiveView {
       lastY = event.clientY;
       this._clampCentre();
       this._applyTransform();
-      this.history.reset();
     };
 
     const end = (event) => {
+      // A tap that didn't drag means "inspect this star" — centre on it. Edge
+      // stars are the awkward case: centre-anchored zoom puts them off-screen.
+      if (!moved) this.focusOn(this.pointToFrame(event));
       if (!dragging) return;
       dragging = false;
       this.viewport.releasePointerCapture?.(event.pointerId);
       this.viewport.classList.remove("is-dragging");
     };
 
+    this.viewport.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      this.setZoomIndex(this.cropIndex + 1, this.pointToFrame(event));
+    });
     this.viewport.addEventListener("pointerdown", begin);
     this.viewport.addEventListener("pointermove", move);
     this.viewport.addEventListener("pointerup", end);
@@ -347,8 +365,9 @@ export class LiveView {
       "wheel",
       (event) => {
         event.preventDefault();
-        if (event.deltaY < 0) this.zoomIn();
-        else this.zoomOut();
+        const anchor = this.pointToFrame(event);
+        if (event.deltaY < 0) this.setZoomIndex(this.cropIndex + 1, anchor);
+        else this.setZoomIndex(this.cropIndex - 1, anchor);
       },
       { passive: false },
     );
@@ -356,53 +375,21 @@ export class LiveView {
     window.addEventListener("resize", () => this._applyTransform());
   }
 
-  /* ------------------------------------------------------------ focus loop */
+  /* -------------------------------------------------------- liveness watch */
 
-  _sample() {
+  /**
+   * Notice a stream that has died without the <img> firing an error.
+   *
+   * Uses the load event's timestamp and nothing else. An earlier version
+   * inferred this by drawing the frame to a canvas and watching a derived
+   * number: drawImage on an MJPEG <img> returns a stale bitmap (the browser
+   * re-decodes on its own schedule), so it disagreed with the load event and
+   * the two oscillated, flashing "stalled" while frames were visibly arriving.
+   */
+  _checkLiveness() {
     if (!this.running || this.busy) return;
-
-    const ready = this.img.naturalWidth > 0 && this.img.naturalHeight > 0;
-    if (!ready) return;
-
-    // Map the visible crop back to source pixels for the meter.
-    const nw = this.img.naturalWidth;
-    const nh = this.img.naturalHeight;
-    const sw = nw * this.crop;
-    const sh = nh * this.crop;
-    const sample = this.meter.measure(this.img, {
-      sx: this.centre.x * nw - sw / 2,
-      sy: this.centre.y * nh - sh / 2,
-      sw,
-      sh,
-    });
-    if (sample === null) return;
-    const { score, signature } = sample;
-
-    // Liveness is judged on the pixels, NOT on the score. The score is one
-    // float derived from 36k pixels, so two different frames of a dark sky
-    // legitimately produce the same number — using it here reported "stalled"
-    // while frames were visibly arriving.
-    if (this._lastSignature !== null && signature === this._lastSignature) {
-      this._identicalCount += 1;
-      if (this._identicalCount >= STALL_SAMPLES && this.state === "live") {
-        this._setState("stalled");
-      }
-    } else {
-      this._identicalCount = 0;
-      if (this.state !== "live") this._setState("live");
+    if (this.state === "live" && performance.now() - this._lastFrameAt > STALL_MS) {
+      this._setState("stalled");
     }
-    this._lastSignature = signature;
-
-    this.history.push(score);
-    this._render();
-  }
-
-  _render() {
-    this.scoreEl.textContent = formatScore(this.history.latest);
-    this.peakEl.textContent = formatScore(this.history.peak || null);
-    const pct = Math.round(this.history.fractionOfPeak * 100);
-    this.peakBar.style.width = `${pct}%`;
-    this.peakBar.parentElement.setAttribute("aria-valuenow", String(pct));
-    this.history.render(this.sparkline);
   }
 }

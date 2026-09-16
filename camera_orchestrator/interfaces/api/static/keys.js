@@ -9,7 +9,6 @@
  *   + / =   zoom in          ↑ ↓ ← →   pan the zoomed view
  *   -       zoom out         Enter     fire / confirm
  *   0       reset zoom       q / Esc   stop live view
- *   f       reset focus peak
  *
  * The one rule that matters: never steal a key from a text field. Typing "2"
  * into the shutter box must not zoom, and Enter in a field must not fire an
@@ -42,7 +41,6 @@ const PANS = {
  *  @param {() => boolean} actions.confirm  Enter, when a prompt is open;
  *                                          returns true if it handled the key
  *  @param {() => void} actions.stop        q / Esc
- *  @param {() => void} actions.resetFocus
  * @returns {() => void} uninstall
  */
 export function installKeyBindings(actions) {
@@ -76,8 +74,6 @@ export function installKeyBindings(actions) {
       actions.fire?.();
     } else if (event.key === "q" || event.key === "Q" || event.key === "Escape") {
       actions.stop?.();
-    } else if (event.key === "f" || event.key === "F") {
-      actions.resetFocus?.();
     } else {
       return; // not ours — let it through
     }

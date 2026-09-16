@@ -348,36 +348,6 @@ kbd {
 .prompt-bar[data-tone="warn"] .prompt-bar-title { color: var(--danger); }
 .prompt-bar[data-tone="attention"] { border-left-color: var(--amber); }
 
-/* Focus readout. */
-.focus-strip {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.4rem 1rem;
-  align-items: center;
-  margin-top: 0.6rem;
-  padding: 0.6rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-2);
-}
-.focus-number { display: flex; flex-direction: column; }
-.focus-number .label {
-  font-size: 0.7rem; text-transform: uppercase;
-  letter-spacing: 0.08em; color: var(--text-dim);
-}
-.focus-number .score {
-  font-size: clamp(2rem, 6vw, 3.2rem);
-  font-weight: 700;
-  line-height: 1;
-  color: var(--accent);
-  /* Reserve width for five digits so the number never resizes the row. */
-  min-width: 5ch;
-}
-.focus-graph { display: flex; flex-direction: column; gap: 0.3rem; }
-.spark { width: 100%; height: 52px; display: block; }
-.focus-peak { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; }
-.focus-help { grid-column: 1 / -1; }
-
 .live-controls {
   display: flex;
   flex-wrap: wrap;
@@ -662,7 +632,6 @@ kbd {
   .layout { padding: 0.6rem; gap: 0.7rem; }
   .topbar { padding: 0.5rem 0.6rem; }
   .camera-status { width: 100%; }
-  .focus-strip { grid-template-columns: 1fr; }
   /* On a phone the legend is noise — the keyboard is not the input method. */
   .legend { display: none; }
   .btn-big { flex-basis: 100%; }

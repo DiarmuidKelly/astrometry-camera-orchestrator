@@ -197,7 +197,6 @@ function main() {
     zoomOut: () => liveView.zoomOut(),
     zoomReset: () => liveView.zoomReset(),
     pan: (dx, dy) => liveView.pan(dx, dy),
-    resetFocus: () => liveView.resetFocus(),
     // Enter: confirm a pending physical prompt if there is one, else fire.
     confirm: () => jobs.confirmPending(),
     fire: () => {

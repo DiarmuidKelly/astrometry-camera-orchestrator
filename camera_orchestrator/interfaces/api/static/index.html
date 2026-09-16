@@ -72,26 +72,6 @@
       </div>
     </div>
 
-    <div class="focus-strip">
-      <div class="focus-number">
-        <span class="label">Focus score</span>
-        <span class="score mono" data-focus-score>—</span>
-      </div>
-      <div class="focus-graph">
-        <canvas class="spark" data-focus-spark aria-hidden="true"></canvas>
-        <div class="focus-peak">
-          <span class="mono muted">peak <span data-focus-peak>—</span></span>
-          <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
-               aria-valuenow="0" aria-label="Sharpness as a share of the best seen">
-            <div class="bar-fill" data-focus-bar></div>
-          </div>
-        </div>
-      </div>
-      <p class="focus-help muted small">
-        Turn the focus ring and watch for the peak. Higher is sharper; the value
-        is only meaningful relative to itself.
-      </p>
-    </div>
 
     <div class="live-controls">
       <button class="btn btn-primary" type="button" data-live-start data-running="false">
@@ -102,7 +82,6 @@
         <button class="btn" type="button" data-zoom-in aria-label="Zoom in">+</button>
         <button class="btn btn-quiet" type="button" data-zoom-reset>Reset</button>
       </div>
-      <button class="btn btn-quiet" type="button" data-focus-reset>Reset peak</button>
       <label class="inline-field">
         <span>Stream</span>
         <select data-live-mode>
@@ -118,7 +97,7 @@
       <li><kbd>+</kbd><kbd>−</kbd> zoom</li>
       <li><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> pan</li>
       <li><kbd>0</kbd> reset zoom</li>
-      <li><kbd>f</kbd> reset peak</li>
+      <li>click a star to zoom on it</li>
       <li><kbd>q</kbd> stop</li>
     </ul>
   </section>
