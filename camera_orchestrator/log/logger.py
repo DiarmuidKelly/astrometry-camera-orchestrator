@@ -66,7 +66,17 @@ class _JsonFormatter(logging.Formatter):
 
 
 class _TextFormatter(logging.Formatter):
-    """Human-readable: timestamp  LEVEL  message  key=value ..."""
+    """Human-readable: timestamp  LEVEL  message  key=value ...
+
+    Args:
+        colour: Whether to emit ANSI colour. Defaults to auto — on only when
+            stdout is a TTY. File handlers must pass False; escape codes in a
+            log file make it painful to read back and to grep.
+    """
+
+    def __init__(self, colour: bool | None = None):
+        super().__init__()
+        self._colour = sys.stdout.isatty() if colour is None else colour
 
     _LEVEL_COLOURS = {
         "DEBUG":    "\033[37m",
@@ -80,7 +90,8 @@ class _TextFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ts = self.formatTime(record, "%H:%M:%S")
         colour = self._LEVEL_COLOURS.get(record.levelname, "")
-        level = f"{colour}{record.levelname:<8}{self._RESET}" if sys.stdout.isatty() else f"{record.levelname:<8}"
+        level = (f"{colour}{record.levelname:<8}{self._RESET}"
+                 if self._colour else f"{record.levelname:<8}")
         base = f"{ts}  {level}  {record.getMessage()}"
         extras = {
             k: v for k, v in record.__dict__.items()
@@ -146,7 +157,9 @@ def add_file_handler(logger: logging.Logger, path: str, fmt: str = "json") -> No
         path: Path to the log file (will be created/appended).
         fmt: "json" (default) or "text".
     """
-    formatter: logging.Formatter = _JsonFormatter() if fmt == "json" else _TextFormatter()
+    formatter: logging.Formatter = (
+        _JsonFormatter() if fmt == "json" else _TextFormatter(colour=False)
+    )
     handler = logging.FileHandler(path, encoding="utf-8")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
@@ -182,7 +195,9 @@ def setup_file_logging(
     dest = Path(path).expanduser()
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    formatter: logging.Formatter = _JsonFormatter() if fmt == "json" else _TextFormatter()
+    formatter: logging.Formatter = (
+        _JsonFormatter() if fmt == "json" else _TextFormatter(colour=False)
+    )
     handler = RotatingFileHandler(
         dest, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
     )

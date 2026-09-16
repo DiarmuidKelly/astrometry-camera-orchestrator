@@ -139,3 +139,12 @@ def test_setup_file_logging_rotates(tmp_path):
 
     assert path.exists()
     assert (tmp_path / "log.log.1").exists()    # rolled over rather than growing
+
+
+def test_file_logging_has_no_ansi_escapes(tmp_path):
+    # Colour codes in a log file make it awkward to read back and to grep.
+    from camera_orchestrator.log.logger import setup_file_logging
+    path = tmp_path / "log.log"
+    setup_file_logging(str(path), fmt="text")
+    get_logger("camera_orchestrator.test_noansi").info("plain please")
+    assert "\x1b[" not in path.read_text()

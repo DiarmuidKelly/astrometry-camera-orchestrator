@@ -49,7 +49,8 @@ export class FocusMeter {
    *
    * @param {CanvasImageSource} source  usually the live-view <img>
    * @param {object} crop  {sx, sy, sw, sh} in source pixels — the visible area
-   * @returns {number|null} sharpness score, or null if the frame is not ready
+   * @returns {{score: number, signature: number}|null} sharpness score plus a
+   *   checksum of the sampled pixels, or null if the frame is not ready
    */
   measure(source, crop) {
     const { sx, sy, sw, sh } = crop;
@@ -72,10 +73,18 @@ export class FocusMeter {
     }
 
     const lum = this._lum;
+    // `signature` is a cheap checksum of the actual pixels, carried alongside
+    // the score purely so the caller can tell "same frame again" from "new
+    // frame that happens to score the same". The sharpness score is a single
+    // float derived from 36k pixels, so genuine repeats are common on a dark
+    // sky — it is not a liveness signal and must not be used as one.
+    let signature = 0;
     for (let i = 0, p = 0; i < lum.length; i += 1, p += 4) {
       // Rec. 601 luma. Integer-ish weights; exact coefficients are irrelevant
       // to a relative sharpness comparison.
-      lum[i] = 0.299 * pixels[p] + 0.587 * pixels[p + 1] + 0.114 * pixels[p + 2];
+      const y = 0.299 * pixels[p] + 0.587 * pixels[p + 1] + 0.114 * pixels[p + 2];
+      lum[i] = y;
+      signature = (Math.imul(signature, 31) + (y | 0)) | 0;
     }
 
     // Welford-free two-pass variance over the interior (border has no
@@ -98,7 +107,7 @@ export class FocusMeter {
     if (n === 0) return null;
     const mean = sum / n;
     const variance = sumSq / n - mean * mean;
-    return variance > 0 ? variance : 0;
+    return { score: variance > 0 ? variance : 0, signature };
   }
 }
 

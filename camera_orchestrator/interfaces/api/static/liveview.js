@@ -91,7 +91,7 @@ export class LiveView {
     this.busy = false; // set by the job layer while the shutter is working
     this.state = "idle";
     this._identicalCount = 0;
-    this._lastScore = null;
+    this._lastSignature = null;
     this._sampleTimer = null;
     this._pollTimer = null;
 
@@ -107,7 +107,7 @@ export class LiveView {
     this.running = true;
     this._setState("connecting");
     this._identicalCount = 0;
-    this._lastScore = null;
+    this._lastSignature = null;
     this._loadSource();
     clearInterval(this._sampleTimer);
     this._sampleTimer = setInterval(() => this._sample(), SAMPLE_MS);
@@ -139,7 +139,7 @@ export class LiveView {
     }
     if (!this.running) return;
     this._identicalCount = 0;
-    this._lastScore = null;
+    this._lastSignature = null;
     this._setState("connecting");
     this._loadSource();
   }
@@ -369,17 +369,20 @@ export class LiveView {
     const nh = this.img.naturalHeight;
     const sw = nw * this.crop;
     const sh = nh * this.crop;
-    const score = this.meter.measure(this.img, {
+    const sample = this.meter.measure(this.img, {
       sx: this.centre.x * nw - sw / 2,
       sy: this.centre.y * nh - sh / 2,
       sw,
       sh,
     });
-    if (score === null) return;
+    if (sample === null) return;
+    const { score, signature } = sample;
 
-    // A byte-identical score run means the decoder is handing us the same
-    // frame: the stream has stopped without the <img> firing an error.
-    if (this._lastScore !== null && score === this._lastScore) {
+    // Liveness is judged on the pixels, NOT on the score. The score is one
+    // float derived from 36k pixels, so two different frames of a dark sky
+    // legitimately produce the same number — using it here reported "stalled"
+    // while frames were visibly arriving.
+    if (this._lastSignature !== null && signature === this._lastSignature) {
       this._identicalCount += 1;
       if (this._identicalCount >= STALL_SAMPLES && this.state === "live") {
         this._setState("stalled");
@@ -388,7 +391,7 @@ export class LiveView {
       this._identicalCount = 0;
       if (this.state !== "live") this._setState("live");
     }
-    this._lastScore = score;
+    this._lastSignature = signature;
 
     this.history.push(score);
     this._render();
