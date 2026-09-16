@@ -9,6 +9,15 @@ from pydantic import BaseModel, Field
 # (e.g. GphotoCamera: raw->'RAW', jpeg->'L', both->'RAW + L').
 ImageFormat = Literal["raw", "jpeg", "both"]
 
+# What a single capture's frames are of. A label only — it drives logging and
+# downstream sorting, not exposure behaviour.
+#
+# Wider than session.PhaseKind, which is deliberately light/dark/bias: a
+# sequence has no flat phase (flats need an evenly lit source, not a dark sky,
+# so they aren't shot in the same run), but a one-off `capture` of flats is
+# exactly how you'd take them.
+FrameKind = Literal["light", "dark", "bias", "flat"]
+
 
 class CameraFile(NamedTuple):
     """A file as it exists on the camera (not yet downloaded)."""
@@ -58,7 +67,7 @@ class CaptureRequest(BaseModel):
     image_format: Optional[ImageFormat] = Field(default=None, description="'raw', 'jpeg', or 'both'. None keeps the camera's current setting.")
     bulb_seconds: Optional[float] = Field(default=None, description="Bulb exposure length in seconds. Overrides shutter.")
     count: int = Field(default=1, ge=1, description="Number of frames to capture.")
-    kind: Literal["light", "dark", "bias"] = Field(default="light", description="Frame type label, for logging and downstream sorting.")
+    kind: FrameKind = Field(default="light", description="Frame type label, for logging and downstream sorting.")
     download: bool = Field(default=False, description="Transfer each frame over USB (True) or shoot to the card only for faster cadence (False, the default).")
     select: Literal["all", "jpeg", "cr2"] = Field(default="all", description="When download is True, which of the shot's files to pull down: 'all', only the 'jpeg', or only the 'cr2'. Ignored when download is False.")
 

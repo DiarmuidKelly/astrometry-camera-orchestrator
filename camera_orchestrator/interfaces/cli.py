@@ -324,7 +324,7 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("--bulb", metavar="SECONDS", type=float, default=None,
                      help="Bulb exposure length in seconds (overrides --shutter)")
     cap.add_argument("--count", type=int, default=1, help="Number of light frames to capture")
-    cap.add_argument("--kind", choices=["light", "dark", "bias"], default="light",
+    cap.add_argument("--kind", choices=["light", "dark", "bias", "flat"], default="light",
                      help="Frame type label (for logging)")
     cap.add_argument("--download", action="store_true",
                      help="Transfer each frame over USB to --out (default: shoot to the card only; pull later with grab)")

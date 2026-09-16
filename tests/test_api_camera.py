@@ -8,11 +8,15 @@ the two live-view failure modes (busy vs live view off).
 """
 from __future__ import annotations
 
+import threading
+import time
+
 from camera_orchestrator.application.camera_session import CameraSession
 from camera_orchestrator.config import Config
 from camera_orchestrator.domain.errors import CameraBusyError, CameraError
 from camera_orchestrator.interfaces.api.app import create_app
 from camera_orchestrator.interfaces.api.deps import get_camera_session
+from camera_orchestrator.interfaces.api.jobs import JobRegistry
 from camera_orchestrator.interfaces.api.routes_system import package_version
 from fastapi.testclient import TestClient
 
@@ -207,3 +211,61 @@ def test_reconnect_rebuilds_the_session():
     client.get("/api/camera/status")                 # first open
     assert client.post("/api/camera/reconnect").json() == {"ok": True}
     assert opens["n"] == 2                           # torn down and opened again
+
+
+def _running_camera_job(app, kind: str = "sequence"):
+    """Put a camera job into 'running' so the lockout has something to see."""
+    registry = app.state.jobs
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocks(ctx):
+        started.set()
+        release.wait(timeout=5)
+        return None
+
+    registry.submit(kind, blocks)
+    started.wait(timeout=5)
+    return release
+
+
+def test_single_frame_is_locked_out_while_a_camera_job_runs():
+    # CameraSession's lock only covers the frames themselves; between sequence
+    # phases and during the card-listing reconnect poll it is briefly free. A
+    # preview slipping into that window would re-open live view on the body
+    # mid-run, so the job-level check refuses before touching the device.
+    session = CameraSession(camera_factory=lambda: MockCamera())
+    app = create_app(Config())
+    app.dependency_overrides[get_camera_session] = lambda: session
+    client = TestClient(app)
+
+    release = _running_camera_job(app)
+    try:
+        assert client.get("/api/camera/frame.jpg").status_code == 503
+    finally:
+        release.set()
+
+
+def test_single_frame_works_again_once_the_job_finishes():
+    session = CameraSession(camera_factory=lambda: MockCamera())
+    app = create_app(Config())
+    app.dependency_overrides[get_camera_session] = lambda: session
+    client = TestClient(app)
+
+    release = _running_camera_job(app)
+    release.set()
+    for _ in range(50):                       # let the worker reach a terminal state
+        if app.state.jobs.camera_job_holding_device() is None:
+            break
+        time.sleep(0.02)
+
+    assert client.get("/api/camera/frame.jpg").status_code == 200   # lock released
+
+
+def test_a_sequence_paused_on_the_lens_cap_does_not_lock_out_live_view():
+    # Deliberate: the shutter is idle while waiting on the cap, and seeing the
+    # cap go on is exactly what live view is for at that moment.
+    registry = JobRegistry()
+    job = registry.submit("sequence", lambda ctx: None)
+    registry._records[job.id].job.state = "awaiting_confirmation"
+    assert registry.camera_job_holding_device() is None

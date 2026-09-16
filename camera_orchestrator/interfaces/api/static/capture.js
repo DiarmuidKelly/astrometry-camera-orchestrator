@@ -77,6 +77,31 @@ export class CapturePanel {
     }
   }
 
+  /**
+   * The frame counts the user has actually asked for, in phase order.
+   *
+   * One field per kind rather than a count plus a kind dropdown: "32 frames"
+   * and "32 lights" were the same thing reached two ways, which read as two
+   * different settings. Flats are capture-only — they need an evenly lit
+   * source, so they are not a phase in a night's sequence.
+   */
+  counts() {
+    const v = this.values();
+    return {
+      light: v.lights || 0,
+      dark: v.darks || 0,
+      bias: v.bias || 0,
+      flat: v.flats || 0,
+    };
+  }
+
+  /** Kinds with a non-zero count, in the order they would be shot. */
+  requestedKinds() {
+    return Object.entries(this.counts())
+      .filter(([, n]) => n > 0)
+      .map(([kind]) => kind);
+  }
+
   /* ------------------------------------------------------------- readouts */
 
   /** Which verb Enter fires. Chosen in the bar so the prompt is unambiguous. */
@@ -99,25 +124,42 @@ export class CapturePanel {
     if (kind === "align") {
       return `align — 1 × ${exposure}${iso}, then plate solve`;
     }
+    const counts = this.counts();
+    const parts = Object.entries(counts)
+      .filter(([, n]) => n > 0)
+      .map(([name, n]) => `${n} ${name}`);
+
     if (kind === "sequence") {
-      return (
-        `sequence — ${v.lights || 0} light / ${v.darks || 0} dark / `
-        + `${v.bias || 0} bias × ${exposure}${iso} · ${destination}`
-      );
+      const phases = parts.filter((p) => !p.endsWith("flat"));
+      if (!phases.length) return "sequence — set a frame count first";
+      return `sequence — ${phases.join(" / ")} × ${exposure}${iso} · ${destination}`;
     }
-    return `fire ${v.count || 1} × ${exposure}${iso} · ${destination}`;
+    if (!parts.length) return "capture — set a frame count first";
+    // Capture fires ONE kind per job, so promise exactly that — this line is
+    // what the user commits to with Enter and it has to be literally true.
+    const [firstKind] = this.requestedKinds();
+    const rest = parts.length - 1;
+    const tail = rest > 0 ? ` (+${rest} more kind${rest > 1 ? "s" : ""} — use Sequence)` : "";
+    return (
+      `capture — ${counts[firstKind]} ${firstKind} × ${exposure}${iso}`
+      + ` · ${destination}${tail}`
+    );
   }
 
-  /** "32 × 2s = 1m 04s" — the phrasing the user reasons in. */
+  /** "32 x 2s = 1m 04s on target" — the phrasing the user reasons in.
+   *
+   * Only lights count toward integration time: darks and bias are calibration,
+   * and adding them would inflate the number that decides whether a target has
+   * had enough exposure.
+   */
   describeIntegration() {
     const v = this.values();
     const seconds = exposureSeconds(v);
-    const frames = this.primary === "sequence" ? v.lights || 0 : v.count || 1;
+    const frames = this.primary === "align" ? 1 : this.counts().light;
+    if (!frames) return "no lights set";
     if (seconds === null) return `${frames} × ${v.shutter || "?"} = —`;
-    return (
-      `${frames} × ${formatShutter(v)} = ${formatDuration(frames * seconds)}`
-      + (this.primary === "sequence" ? " on target" : "")
-    );
+    const total = `${frames} × ${formatShutter(v)} = ${formatDuration(frames * seconds)}`;
+    return this.primary === "align" ? total : `${total} on target`;
   }
 
   _recalculate() {
@@ -164,11 +206,18 @@ export class CapturePanel {
       };
       submit = startSequence;
     } else {
+      // Capture shoots ONE kind per job. With several counts set, the first in
+      // phase order goes now; the rest are what `sequence` is for.
+      const [first] = this.requestedKinds();
+      if (!first) {
+        this.onError(new Error("Set a frame count first — lights, darks, bias or flats."));
+        return null;
+      }
       body = {
         ...shared,
         image_format: v.image_format || null,
-        count: v.count ?? 1,
-        kind: v.kind || "light",
+        count: this.counts()[first],
+        kind: first,
         download: Boolean(v.download),
         select: v.select || null,
       };

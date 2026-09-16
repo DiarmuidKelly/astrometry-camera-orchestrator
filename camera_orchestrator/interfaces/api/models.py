@@ -21,6 +21,7 @@ from camera_orchestrator.config import Config
 from camera_orchestrator.domain.models.align import AlignRequest
 from camera_orchestrator.domain.models.browse import SessionEntry
 from camera_orchestrator.domain.models.camera import CameraStatus, CaptureRequest, ImageFormat
+from camera_orchestrator.domain.models.camera import FrameKind
 from camera_orchestrator.domain.models.session import PhaseKind, SequenceRequest
 
 JobKind = Literal["capture", "align", "sequence", "batch", "solve"]
@@ -92,7 +93,7 @@ class CaptureJobBody(_SessionBody):
     image_format: Optional[ImageFormat] = Field(default=None, description="'raw', 'jpeg' or 'both'. None keeps the camera's current setting.")
     bulb_seconds: Optional[float] = Field(default=None, description="Bulb exposure length in seconds. Overrides shutter.")
     count: int = Field(default=1, ge=1, description="Number of frames to capture.")
-    kind: PhaseKind = Field(default="light", description="Frame type label.")
+    kind: FrameKind = Field(default="light", description="Frame type label.")
     download: bool = Field(default=False, description="Transfer each frame over USB (True) or shoot to the card only (False, the default).")
     select: Literal["all", "jpeg", "cr2"] = Field(default="all", description="Which of a shot's files to pull down when download is True.")
 

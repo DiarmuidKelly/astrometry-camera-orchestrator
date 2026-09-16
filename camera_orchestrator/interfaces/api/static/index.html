@@ -159,33 +159,31 @@
         </label>
 
         <label class="field">
-          <span>Frames</span>
-          <input type="number" name="count" min="1" step="1">
-        </label>
-
-        <label class="field">
           <span>Lights</span>
-          <input type="number" name="lights" min="0" step="1">
+          <input type="number" name="lights" min="0" step="1"
+                 aria-describedby="hint-lights">
+          <small id="hint-lights" class="field-hint">frames of the target</small>
         </label>
 
         <label class="field">
           <span>Darks</span>
-          <input type="number" name="darks" min="0" step="1">
+          <input type="number" name="darks" min="0" step="1"
+                 aria-describedby="hint-darks">
+          <small id="hint-darks" class="field-hint">lens capped, same ISO + shutter</small>
         </label>
 
         <label class="field">
           <span>Bias</span>
-          <input type="number" name="bias" min="0" step="1">
+          <input type="number" name="bias" min="0" step="1"
+                 aria-describedby="hint-bias">
+          <small id="hint-bias" class="field-hint">lens capped, fastest shutter</small>
         </label>
 
         <label class="field">
-          <span>Frame kind</span>
-          <select name="kind">
-            <option value="light">light</option>
-            <option value="dark">dark</option>
-            <option value="bias">bias</option>
-            <option value="flat">flat</option>
-          </select>
+          <span>Flats</span>
+          <input type="number" name="flats" min="0" step="1"
+                 aria-describedby="hint-flats">
+          <small id="hint-flats" class="field-hint">evenly lit source — Capture only</small>
         </label>
 
         <label class="field">

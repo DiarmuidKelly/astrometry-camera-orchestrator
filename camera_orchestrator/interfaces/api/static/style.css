@@ -674,3 +674,14 @@ kbd {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Per-field hint: says what each frame kind is for, so the lens-cap
+   requirement for darks/bias is visible at the point of entry. */
+.field-hint {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: var(--text-dim, #8a5a52);
+  letter-spacing: 0.01em;
+}
