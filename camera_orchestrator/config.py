@@ -3,11 +3,27 @@ from __future__ import annotations
 
 import os
 import tempfile
+from io import StringIO
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field
+from ruamel.yaml import YAML
+
+
+def _merge_into(doc: Any, values: dict) -> None:
+    """Write `values` into `doc` in place, keeping doc's comments and key order.
+
+    Recurses into nested mappings so a section's comments survive; keys absent
+    from doc are appended. Only the scalar values change, which is what keeps
+    the hand-written annotations attached to the lines they describe.
+    """
+    for key, value in values.items():
+        if isinstance(value, dict) and isinstance(doc.get(key), dict):
+            _merge_into(doc[key], value)
+        else:
+            doc[key] = value
 
 
 class SolverConfig(BaseModel):
@@ -78,11 +94,18 @@ class Config(BaseModel):
         return cls.model_validate(data)
 
     def save(self, path: str) -> str:
-        """Write this config back to a YAML file.
+        """Write this config back to a YAML file, preserving comments.
+
+        An existing file is updated in place through a round-trip parser so its
+        comments, key order and formatting survive. That matters: this file is
+        hand-annotated with the things that silently break solving if forgotten
+        — which sensor width belongs to which body, why focal_mm is null, which
+        object an RA/Dec hint points at. A plain safe_dump round-trip would
+        delete all of it the first time the UI saved.
 
         Written atomically (temp file in the same directory, then replaced) so a
         crash mid-write can't leave a truncated config — losing solver.index_dir
-        or optics.sensor_width_mm silently degrades every later solve rather than
+        or optics.sensor_width_mm degrades every later solve rather than
         erroring, so a half-written file is worse than no write at all.
 
         Args:
@@ -93,11 +116,7 @@ class Config(BaseModel):
         """
         dest = Path(path)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        payload = yaml.safe_dump(
-            self.model_dump(mode="json"),
-            sort_keys=False,
-            default_flow_style=False,
-        )
+        payload = self._render_yaml(dest)
         # Same directory so os.replace stays on one filesystem (atomic rename).
         with tempfile.NamedTemporaryFile(
             "w", dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp", delete=False
@@ -108,3 +127,26 @@ class Config(BaseModel):
             tmp_path = tmp.name
         os.replace(tmp_path, dest)
         return str(dest)
+
+    def _render_yaml(self, dest: Path) -> str:
+        """Serialise to YAML, merging into `dest`'s existing document if present."""
+        data = self.model_dump(mode="json")
+        if not dest.exists():
+            return yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
+
+        rt = YAML()  # round-trip mode: retains comments, key order and quoting
+        rt.preserve_quotes = True
+        try:
+            with open(dest) as f:
+                doc = rt.load(f)
+        except Exception:
+            # Unparseable existing file — don't let it block the write.
+            return yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
+
+        if doc is None:
+            return yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
+
+        _merge_into(doc, data)
+        buf = StringIO()
+        rt.dump(doc, buf)
+        return buf.getvalue()

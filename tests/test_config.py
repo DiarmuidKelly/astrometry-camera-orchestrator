@@ -106,3 +106,36 @@ def test_save_overwrites_atomically(tmp_path):
     assert Config.load(str(path)).search.ra_deg == 297.70
     leftovers = [p.name for p in tmp_path.iterdir() if p.name != "config.yaml"]
     assert leftovers == []                 # temp file replaced, not left behind
+
+
+def test_save_preserves_comments_in_an_existing_file(tmp_path):
+    # config.yaml is hand-annotated with the things that silently break solving
+    # if forgotten — a UI save must not delete them.
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "optics:\n"
+        "  # focal_mm is intentionally null — EXIF takes priority.\n"
+        "  focal_mm:\n"
+        "  sensor_width_mm: 35.8  # Canon 5D Mark II (full-frame)\n"
+        "search:\n"
+        "  ra_deg: 10.68\n"
+    )
+    cfg = Config.load(str(path))
+    cfg.search.ra_deg = 297.70
+    cfg.save(str(path))
+
+    text = path.read_text()
+    assert "# focal_mm is intentionally null — EXIF takes priority." in text
+    assert "# Canon 5D Mark II (full-frame)" in text
+    assert Config.load(str(path)).search.ra_deg == 297.70   # value still updated
+    assert Config.load(str(path)).optics.focal_mm is None   # null survived the trip
+
+
+def test_save_falls_back_cleanly_on_an_unparseable_file(tmp_path):
+    # A corrupt file must not block the write, or the UI could never recover.
+    path = tmp_path / "config.yaml"
+    path.write_text("solver: [unclosed\n")
+    cfg = Config.load(None)
+    cfg.search.ra_deg = 1.5
+    cfg.save(str(path))
+    assert Config.load(str(path)).search.ra_deg == 1.5
