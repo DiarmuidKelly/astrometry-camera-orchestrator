@@ -7,12 +7,13 @@ results; they contain no camera or solving logic themselves.
 from __future__ import annotations
 
 import argparse
-import json
+import os
 import sys
-from datetime import date
 from pathlib import Path
 
+from camera_orchestrator.application.batch_service import BatchSolveResult, BatchSolveService
 from camera_orchestrator.application.grab_service import grab_latest, poll
+from camera_orchestrator.application.session_paths import resolve_session
 from camera_orchestrator.application.solve_service import solve_file
 from camera_orchestrator.composition import (
     build_align_service,
@@ -26,86 +27,80 @@ from camera_orchestrator.domain.errors import CameraError, GrabError
 from camera_orchestrator.domain.models.align import AlignRequest
 from camera_orchestrator.domain.models.camera import CameraStatus, CaptureRequest
 from camera_orchestrator.domain.models.session import SequenceRequest
-from camera_orchestrator.log import get_logger
-
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".cr2"}
+from camera_orchestrator.domain.models.solve import SolveRecord
+from camera_orchestrator.log import get_logger, setup_file_logging
 
 log = get_logger("camera_orchestrator.batch")  # reconfigured after config load in main()
 
 
 def cmd_batch(args: argparse.Namespace, cfg: Config) -> None:
-    solver = build_solver(cfg)
-    repo = build_repository()
-
-    folder = Path(args.folder)
-    images = sorted(
-        p for p in folder.iterdir()
-        if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
+    service = BatchSolveService(
+        solver_factory=build_solver,
+        repository=build_repository(),
+        cfg=cfg,
+        mode=args.mode,
+        cpulimit=args.cpulimit,
     )
+    folder = Path(args.folder)
+    annotate_dir = folder / "annotated" if args.annotate else None
 
-    if not images:
-        log.error("No images found", extra={"folder": str(folder)})
-        sys.exit(1)
-
-    sidecar_dir = folder / "annotated" if args.annotate else folder
-
-    if not args.reprocess:
-        pending = [p for p in images if not repo.exists(p.name, str(sidecar_dir))]
-        skipped = len(images) - len(pending)
+    def on_plan(pending: int, skipped: int) -> None:
         if skipped:
             log.info("Skipping already-solved images — pass --reprocess to re-solve all",
                      extra={"skipped": skipped})
-        images = pending
+        if not pending:
+            return
+        log.info("Starting batch solve",
+                 extra={"images": pending, "solver": service.cfg.solver.image,
+                        "mode": service.cfg.solver.mode})
+        if service.cfg.search.ra_deg is not None:
+            log.info("Search hint",
+                     extra={"ra": service.cfg.search.ra_deg, "dec": service.cfg.search.dec_deg,
+                            "radius_deg": service.cfg.search.radius_deg})
+        if annotate_dir:
+            log.info("Annotated output", extra={"dir": str(annotate_dir)})
 
-    if not images:
-        log.info("All images already solved")
-        sys.exit(0)
+    def on_image_start(index: int, total: int, path: Path) -> None:
+        log.info("Solving", extra={"image": path.name, "index": index, "total": total})
 
-    log.info("Starting batch solve",
-             extra={"images": len(images), "solver": cfg.solver.image, "mode": cfg.solver.mode})
-
-    if cfg.search.ra_deg is not None:
-        log.info("Search hint",
-                 extra={"ra": cfg.search.ra_deg, "dec": cfg.search.dec_deg,
-                        "radius_deg": cfg.search.radius_deg})
-
-    annotate_dir = folder / "annotated" if args.annotate else None
-    if annotate_dir:
-        annotate_dir.mkdir(exist_ok=True)
-        log.info("Annotated output", extra={"dir": str(annotate_dir)})
-
-    summary = []
-
-    for i, path in enumerate(images, 1):
-        log.info("Solving", extra={"image": path.name, "index": i, "total": len(images)})
-
-        annotate_out = str(annotate_dir / f"{path.stem}_solved.jpg") if annotate_dir else None
-
-        job = solve_file(str(path), solver, cfg, annotate_out=annotate_out)
-        record = job.to_record(cfg)
-
-        repo.save(record, str(sidecar_dir))
-        summary.append(record.model_dump())
-
-        if job.solved and record.solve is not None:
+    def on_image(index: int, total: int, record: SolveRecord) -> None:
+        if record.solved and record.solve is not None:
             log.info("Solved", extra={
-                "image": path.name,
+                "image": record.original_file,
                 "ra": round(record.solve.center_ra_deg, 4),
                 "dec": round(record.solve.center_dec_deg, 4),
                 "scale": round(record.solve.scale_arcsec_per_px, 2),
             })
         else:
             log.warning("No solution", extra={
-                "image": path.name,
+                "image": record.original_file,
                 "error": record.error or "solver returned None",
             })
 
-    (folder / "solve_results.json").write_text(json.dumps(summary, indent=2))
+    result = service.run(
+        str(folder),
+        annotate=args.annotate,
+        reprocess=args.reprocess,
+        on_plan=on_plan,
+        on_image_start=on_image_start,
+        on_image=on_image,
+    )
 
-    solved = sum(1 for r in summary if r["solved"])
+    _render_batch_result(result)
+
+
+def _render_batch_result(result: BatchSolveResult) -> None:
+    """Map a batch outcome onto log lines and the CLI's exit codes."""
+    if result.status == "no_images":
+        log.error("No images found", extra={"folder": result.folder})
+        sys.exit(1)
+    if result.status == "all_solved":
+        log.info("All images already solved")
+        sys.exit(0)
+
     log.info("Batch complete",
-             extra={"solved": solved, "total": len(summary),
-                    "results": str(folder / "solve_results.json")})
+             extra={"solved": result.solved, "total": len(result.records),
+                    "results": result.results_path})
 
 
 def _log_status(status: CameraStatus) -> None:
@@ -159,19 +154,13 @@ def cmd_grab(args: argparse.Namespace, cfg: Config) -> None:
 
 
 def _resolve_session(args: argparse.Namespace, cfg: Config) -> tuple[str, str | None]:
-    """Map --name + --out/config into (out_dir, session_dir).
+    """Argparse adapter over application.session_paths.resolve_session.
 
-    Named: session_dir = <root>/<YYYYMMDD>-<name>, created on write, and out_dir
-    points at it. Unnamed (loose): session_dir is None and out_dir is the parent
-    root. Date-prefixed so align and sequence with the same name resolve the same
-    folder within a day.
+    Pulls the root (--out or grab.out_dir) and --name out of the Namespace; the
+    <root>/<YYYYMMDD>-<name> rule itself lives in the application layer so the
+    API resolves sessions identically.
     """
-    root = args.out or cfg.grab.out_dir
-    name = getattr(args, "name", None)
-    if not name:
-        return root, None
-    session_dir = str(Path(root) / f"{date.today():%Y%m%d}-{name}")
-    return session_dir, session_dir
+    return resolve_session(args.out or cfg.grab.out_dir, getattr(args, "name", None))
 
 
 def cmd_align(args: argparse.Namespace, cfg: Config) -> None:
@@ -275,9 +264,42 @@ def cmd_solve(args: argparse.Namespace, cfg: Config) -> None:
         sys.exit(1)
 
 
+def cmd_serve(args: argparse.Namespace, cfg: Config) -> None:
+    """Run the web UI + JSON API under uvicorn until interrupted.
+
+    Imported lazily: fastapi/uvicorn are only needed for this one verb, and
+    every other command should start without paying for the import.
+    """
+    import uvicorn
+
+    from camera_orchestrator.interfaces.api import create_app
+
+    log.info("Serving web UI", extra={"host": args.host, "port": args.port,
+                                      "url": f"http://{args.host}:{args.port}/"})
+    if args.reload:
+        # --reload needs an import string so the reloader can re-import the app
+        # in its child process; the config path travels via the environment.
+        from camera_orchestrator.interfaces.api.app import CONFIG_ENV_VAR, HOST_ENV_VAR
+
+        os.environ[CONFIG_ENV_VAR] = args.config
+        os.environ[HOST_ENV_VAR] = args.host
+        uvicorn.run("camera_orchestrator.interfaces.api.app:reloadable_app",
+                    host=args.host, port=args.port, reload=True, factory=True,
+                    log_level=cfg.logging.level.lower())
+        return
+
+    # bind_host fixes the Host allow-list, and the browse root is frozen from the
+    # config read at startup — both are start-time facts, so they are settled
+    # here rather than per request.
+    uvicorn.run(create_app(cfg, config_path=args.config, bind_host=args.host),
+                host=args.host, port=args.port, log_level=cfg.logging.level.lower())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="camera-orchestrator")
     parser.add_argument("--config", default="config.yaml", help="Config YAML path")
+    parser.add_argument("--log-file", default=None,
+                        help="Rotating log file path (default: logging.file from config, log.log)")
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -308,7 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("--bulb", metavar="SECONDS", type=float, default=None,
                      help="Bulb exposure length in seconds (overrides --shutter)")
     cap.add_argument("--count", type=int, default=1, help="Number of light frames to capture")
-    cap.add_argument("--kind", choices=["light", "dark", "bias"], default="light",
+    cap.add_argument("--kind", choices=["light", "dark", "bias", "flat"], default="light",
                      help="Frame type label (for logging)")
     cap.add_argument("--download", action="store_true",
                      help="Transfer each frame over USB to --out (default: shoot to the card only; pull later with grab)")
@@ -352,6 +374,18 @@ def build_parser() -> argparse.ArgumentParser:
     seq.add_argument("--download", action="store_true",
                      help="Transfer frames over USB to the session folder (default: shoot to the card only)")
 
+    srv = sub.add_parser("serve", help="Serve the web UI and JSON API")
+    srv.add_argument("--host", default="127.0.0.1",
+                     help="Interface to bind (default: 127.0.0.1, this machine only). "
+                          "Use --host 0.0.0.0 to expose it to the LAN so a phone at the "
+                          "scope can reach it. There is no authentication: anyone who can "
+                          "reach the port can drive the camera, start and cancel "
+                          "exposures, and browse and download the whole capture tree, "
+                          "images included. Only do that on a network you trust.")
+    srv.add_argument("--port", type=int, default=8000, help="Port to listen on (default: 8000)")
+    srv.add_argument("--reload", action="store_true",
+                     help="Reload on source changes (development only)")
+
     return parser
 
 
@@ -360,9 +394,21 @@ def main() -> None:
 
     cfg = Config.load(args.config)
 
+    # Before any logger is built, so every module's handler picks up the file.
+    log_file = getattr(args, "log_file", None) or cfg.logging.file
+    if log_file:
+        setup_file_logging(
+            log_file,
+            fmt=cfg.logging.file_format,
+            max_bytes=cfg.logging.max_bytes,
+            backup_count=cfg.logging.backup_count,
+        )
+
     global log
     log = get_logger("camera_orchestrator.batch",
                      fmt=cfg.logging.format, level=cfg.logging.level)
+    if log_file:
+        log.info("Logging to file", extra={"path": log_file})
 
     if args.command == "solve":
         if args.mode:
@@ -376,9 +422,9 @@ def main() -> None:
         cmd_align(args, cfg)
     elif args.command == "sequence":
         cmd_sequence(args, cfg)
+    elif args.command == "serve":
+        cmd_serve(args, cfg)
     elif args.command == "batch":
-        if args.mode:
-            cfg.solver.mode = args.mode
-        if args.cpulimit:
-            cfg.solver.cpulimit = args.cpulimit
+        # --mode / --cpulimit are passed through to the service, which copies the
+        # config rather than mutating this shared one.
         cmd_batch(args, cfg)

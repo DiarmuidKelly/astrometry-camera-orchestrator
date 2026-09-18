@@ -158,6 +158,24 @@ class GphotoCamera(Camera):
         finally:
             self._set("bulb", "0")
 
+    # -- live view ---------------------------------------------------------
+
+    def capture_preview(self) -> bytes:
+        """Grab one live-view frame as raw JPEG bytes.
+
+        The body streams live view as JPEG already, so we hand the bytes on
+        untouched (an MJPEG route can forward them verbatim). On the 5D Mark II
+        live view must be enabled on the body — with the mirror down the camera
+        refuses the preview, which is a normal condition, not a fault.
+        """
+        try:
+            preview = self._cam.capture_preview()
+            return bytes(preview.get_data_and_size())
+        except gp.GPhoto2Error as exc:
+            raise CameraError(
+                f"live view preview failed: {exc} — is live view enabled on the body?"
+            ) from exc
+
     # -- atomic file operations -------------------------------------------
 
     def flush_events(self, timeout_ms: int | None = None) -> None:

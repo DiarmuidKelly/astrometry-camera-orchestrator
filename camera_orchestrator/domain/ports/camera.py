@@ -74,6 +74,18 @@ class Camera(ABC):
         Requires bulb-capable hardware; raises CameraError otherwise.
         """
 
+    # -- live view ---------------------------------------------------------
+
+    @abstractmethod
+    def capture_preview(self) -> bytes:
+        """Grab one live-view frame as raw JPEG bytes.
+
+        Bytes, not a decoded image: the domain imports nothing external (numpy
+        is a data-representation dep of the adapters), and an MJPEG stream can
+        forward the camera's own JPEG with no decode/re-encode round trip.
+        Raises CameraError if the body has live view off (mirror down).
+        """
+
     # -- atomic file operations -------------------------------------------
 
     @abstractmethod

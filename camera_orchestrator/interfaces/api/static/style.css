@@ -1,0 +1,742 @@
+/*
+ * style.css — dark, red-shifted theme for use at a telescope.
+ *
+ * This is operated outdoors at night, next to a scope, sometimes from a phone
+ * with cold hands. Three rules shape everything below:
+ *
+ *  1. NO LARGE LIGHT FIELDS. Backgrounds are near-black; text is a dim warm
+ *     grey, never pure white. A white flash costs 20 minutes of dark
+ *     adaptation.
+ *  2. RED-SHIFTED ACCENTS. Deep red and amber only — long wavelengths that
+ *     preserve rod-cell sensitivity. This is the established astronomy
+ *     convention and it genuinely matters here.
+ *  3. NO LAYOUT SHIFT. Numeric readouts are tabular-figure monospace with
+ *     reserved width, so a live-updating count or elapsed time does not make
+ *     the page jitter.
+ *  4. CONTRAST IS NOT NEGOTIABLE EITHER. Red-shifted does not mean dim: the
+ *     greys and the heading red are tuned to clear WCAG AA (4.5:1) against the
+ *     panel backgrounds. Keeping the hue is what protects dark adaptation;
+ *     keeping the text unreadable protects nothing.
+ *
+ * Self-hosted system font stack — no CDN, no webfont; this must work with no
+ * internet at all.
+ */
+
+:root {
+  --bg: #070405;
+  --bg-2: #0d0809;
+  --panel: #120c0e;
+  --panel-2: #170f11;
+  --line: #2b1a1d;
+  --line-bright: #45262a;
+
+  /* Same red hue throughout, three steps of emphasis. The ratios below are
+     against --panel-2, the lightest surface text sits on, so every other
+     background is better still:
+       --text        10.1:1   --text-dim  6.0:1   --text-faint  4.6:1
+     --text-faint is the floor for body copy and it clears AA on its own. */
+  --text: #cfb9b8;
+  --text-dim: #a88a8c;
+  --text-faint: #92767a;
+
+  --accent: #ff4a2a;
+  /* Surfaces and borders (the primary button's fill). Too dark for text. */
+  --accent-soft: #c23a1e;
+  /* The same red, lifted to 4.7:1 — for headings and anything else that is
+     read rather than looked at. */
+  --accent-head: #e64524;
+  --accent-dim: #4a1a10;
+  --amber: #ffa62b;
+  --amber-dim: #4a3410;
+  --danger: #ff6b4a;
+
+  --radius: 10px;
+  --tap: 44px; /* minimum touch target */
+
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
+    "DejaVu Sans Mono", monospace;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
+h1 { font-size: 1.05rem; }
+h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent-head); }
+h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); }
+h4 { font-size: 1rem; }
+p { margin: 0.2rem 0; }
+
+.mono {
+  font-family: var(--mono);
+  /* Tabular figures: digits keep a constant width so live numbers do not
+     shuffle the layout as they update. */
+  font-variant-numeric: tabular-nums;
+}
+.muted { color: var(--text-dim); }
+.small { font-size: 0.8rem; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ------------------------------------------------------------- controls */
+
+.btn {
+  min-height: var(--tap);
+  padding: 0 1rem;
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.btn:hover:not(:disabled) { border-color: var(--accent-soft); color: #e8d0cc; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn-primary {
+  background: linear-gradient(180deg, var(--accent-soft), #8d2814);
+  border-color: var(--accent);
+  color: #ffe8e2;
+  font-weight: 600;
+}
+.btn-quiet {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--text-dim);
+  min-height: 38px;
+  padding: 0 0.7rem;
+  font-size: 0.85rem;
+}
+.btn-big { min-height: 52px; font-size: 1rem; flex: 1 1 auto; }
+.btn-huge { min-height: 76px; font-size: 1.35rem; padding: 0 2rem; font-weight: 700; }
+
+input, select, textarea {
+  min-height: var(--tap);
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  background: #0a0607;
+  border: 1px solid var(--line-bright);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+input[type="checkbox"] {
+  width: 26px; height: 26px; min-height: 26px; accent-color: var(--accent);
+}
+::placeholder { color: var(--text-faint); }
+
+kbd {
+  display: inline-block;
+  min-width: 1.5em;
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--line-bright);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: #0a0607;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.8em;
+  text-align: center;
+}
+
+/* The `hidden` attribute is a UA rule, so any author `display` (like .badge
+   below) beats it. Without this the "mock data" badge shows on the real UI. */
+[hidden] { display: none !important; }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.badge[data-state="running"],
+.badge[data-state="pending"] { color: var(--amber); border-color: var(--amber-dim); }
+.badge[data-state="awaiting_confirmation"] {
+  color: #0a0405; background: var(--amber); border-color: var(--amber);
+  font-weight: 700;
+}
+.badge[data-state="succeeded"] { color: var(--accent-head); border-color: var(--accent-dim); }
+.badge[data-state="failed"] { color: var(--danger); border-color: var(--danger); }
+
+/* Generic progress bar. */
+.bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #1a0f11;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent-soft), var(--accent));
+  transition: width 0.25s linear;
+}
+
+/* --------------------------------------------------------------- topbar */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.brand { display: flex; align-items: center; gap: 0.6rem; }
+.camera-status { display: flex; align-items: center; gap: 0.6rem; }
+.camera-name { font-size: 0.9rem; }
+.camera-detail { font-size: 0.72rem; }
+
+.dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 8px currentColor;
+  flex: none;
+}
+.dot[data-state="ok"] { background: var(--accent); color: var(--accent); }
+.dot[data-state="limited"] { background: var(--amber); color: var(--amber); }
+.dot[data-state="down"] { background: #4a2a2a; color: transparent; }
+
+.banner {
+  display: flex; gap: 1rem; align-items: center; justify-content: space-between;
+  padding: 0.6rem 1rem;
+  background: #2a0d09;
+  border-bottom: 1px solid var(--danger);
+  color: #ffd6cc;
+  font-size: 0.9rem;
+}
+
+/* --------------------------------------------------------------- layout */
+
+.layout {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  grid-template-columns: 1fr;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.9rem;
+}
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; flex-wrap: wrap;
+}
+.panel-head-actions { display: flex; gap: 0.4rem; }
+
+/* Live view dominates at every width. */
+.panel-live { padding: 0.6rem; }
+
+@media (min-width: 1000px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr) 380px;
+    align-items: start;
+  }
+  .panel-live { grid-column: 1; grid-row: 1 / span 2; }
+  .panel-capture { grid-column: 2; grid-row: 1; }
+  .panel-jobs { grid-column: 2; grid-row: 2; }
+  .panel-config { grid-column: 1 / -1; }
+  .panel-browser { grid-column: 1 / -1; }
+}
+
+/* ------------------------------------------------------------ live view */
+
+/* The shell is the frame's positioning context — the badges, the stream
+   overlay and the lens-cap takeover are all `inset: 0` against it — so the
+   width cap belongs HERE, not on .viewport, or the overlays would stretch past
+   the frame they are supposed to cover. */
+.viewport-shell {
+  position: relative;
+  /* Height of everything that is NOT the frame but must stay on screen with
+     it: the topbar, the prompt bar, the live controls, the legend and the page
+     padding. Measured, with a little slack. */
+  --live-chrome: 320px;
+  /* Cap the frame by the WINDOW height, not only by the column width. A 3:2 box
+     filling a 1920px-wide column is 980px tall, which pushed the prompt bar —
+     the one line that says what Enter will do — 10px below the fold on the
+     likeliest rig display. Capping the width at 1.5x the available height keeps
+     the box 3:2 and simply makes it smaller, rather than letterboxing it.
+     dvh, not vh: a phone's collapsing URL bar must not change the answer. */
+  max-inline-size: max(360px, calc((100dvh - var(--live-chrome)) * 1.5));
+  margin-inline: auto;
+}
+
+.viewport {
+  position: relative;
+  overflow: hidden;              /* the crop window for digital zoom */
+  aspect-ratio: 3 / 2;
+  /* Belt and braces against the width cap above: never taller than the space
+     there is, never so short it is useless for judging focus. */
+  max-block-size: max(240px, calc(100dvh - var(--live-chrome)));
+  background: #000;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  touch-action: none;            /* we handle drag-to-pan ourselves */
+  user-select: none;             /* a pan must not select the page instead */
+  -webkit-user-select: none;
+  cursor: default;
+}
+.panel-live[data-zoomed="true"] .viewport { cursor: grab; }
+.viewport.is-dragging { cursor: grabbing; }
+.viewport:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.viewport-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* An <img> is natively draggable, and the drag gesture fired `pointercancel`
+     one move into a pan — so a 60px drag panned 6px and left a ghost image
+     trailing the cursor. The pan handlers live on .viewport, so the frame
+     itself wants no pointer events at all. */
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+  transform-origin: center center;
+  /* No transition: focusing is a real-time feedback loop and easing the zoom
+     would put a lag between the key press and the pixels. */
+  will-change: transform;
+  image-rendering: auto;
+}
+
+.live-badge {
+  position: absolute;
+  top: 0.5rem; left: 0.5rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(10, 4, 5, 0.8);
+  border: 1px solid var(--line-bright);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.live-badge[data-state="live"] { color: var(--accent); border-color: var(--accent-dim); }
+.live-badge[data-state="busy"],
+.live-badge[data-state="stalled"] { color: var(--amber); border-color: var(--amber-dim); }
+.live-badge[data-state="error"] { color: var(--danger); border-color: var(--danger); }
+.live-zoom { left: auto; right: 0.5rem; text-transform: none; }
+
+.live-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  text-align: center;
+  background: rgba(6, 3, 4, 0.88);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+.live-overlay[data-state="busy"] { color: var(--amber); }
+
+/* The onscreen prompt: always says what Enter will do, or what is happening. */
+.prompt-bar {
+  margin-top: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line-bright);
+  border-left: 4px solid var(--accent-soft);
+  border-radius: 8px;
+  background: var(--panel-2);
+  /* Fixed minimum height so the layout does not jump between states. */
+  min-height: 78px;
+}
+.prompt-bar-title {
+  font-size: clamp(1.05rem, 2.4vw, 1.5rem);
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.25;
+}
+.prompt-bar-detail { font-size: 0.85rem; color: var(--text-dim); }
+.prompt-bar .bar { margin-top: 0.5rem; }
+.prompt-bar[data-tone="busy"] { border-left-color: var(--amber); }
+.prompt-bar[data-tone="busy"] .prompt-bar-title { color: var(--amber); }
+.prompt-bar[data-tone="warn"] { border-left-color: var(--danger); }
+.prompt-bar[data-tone="warn"] .prompt-bar-title { color: var(--danger); }
+.prompt-bar[data-tone="attention"] { border-left-color: var(--amber); }
+
+.live-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.6rem;
+}
+.zoom-controls { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+.zoom-controls .btn { min-width: 52px; font-size: 1.25rem; }
+
+.inline-field { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; }
+.inline-field select { width: auto; min-width: 120px; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------- lens-cap / physical takeover */
+
+.takeover {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  border-radius: 8px;
+  z-index: 5;
+  /* Deep red for "cover", amber for "uncover" — distinguishable at a glance,
+     across a garden, without reading the word. Both stay night-safe. */
+  background: radial-gradient(circle at 50% 40%, #2a0a06, #0a0304 70%);
+  animation: takeover-in 0.18s ease-out;
+}
+.takeover[data-mode="uncover"] {
+  background: radial-gradient(circle at 50% 40%, #33230a, #0a0604 70%);
+}
+@keyframes takeover-in { from { opacity: 0; } to { opacity: 1; } }
+
+.prompt-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+  max-width: 34rem;
+}
+.prompt-icon { width: clamp(64px, 14vw, 128px); color: var(--accent); }
+.takeover[data-mode="uncover"] .prompt-icon { color: var(--amber); }
+
+.prompt-headline {
+  font-size: clamp(2rem, 8vw, 4.2rem);
+  line-height: 1;
+  letter-spacing: 0.03em;
+  font-weight: 800;
+  color: var(--accent);
+  text-transform: none;
+}
+.takeover[data-mode="uncover"] .prompt-headline { color: var(--amber); }
+.prompt-phase { font-size: clamp(1rem, 3vw, 1.5rem); color: var(--text); }
+.prompt-message { font-size: 0.95rem; color: var(--text-dim); max-width: 30rem; }
+.prompt-next { font-size: 0.9rem; color: var(--text); }
+.prompt-waiting {
+  display: flex; align-items: center; gap: 0.45rem;
+  font-size: 0.85rem; color: var(--text-dim);
+}
+.pulse-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--amber);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+.prompt-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.5rem; }
+.prompt-hint { font-size: 0.8rem; color: var(--text-faint); }
+
+/* ---------------------------------------------------------- capture form */
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+.field { display: flex; flex-direction: column; gap: 0.2rem; }
+.field > span, .field > label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
+.field-wide { grid-column: 1 / -1; }
+
+/* Shot counts, boxed off from the exposure settings above. These are the four
+   numbers that decide what Enter actually fires, so they read as one decision
+   rather than four inputs lost among ISO/shutter/aperture. */
+.field-group {
+  border: 1px solid var(--line-bright);
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem 0.7rem;
+  margin: 0.6rem 0;
+  min-inline-size: 0;            /* fieldsets otherwise refuse to shrink */
+}
+.field-group > legend {
+  padding: 0 0.4rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
+.field-grid-tight { margin: 0; }
+.field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  grid-column: 1 / -1;
+  min-height: var(--tap);
+}
+.field-check span { text-transform: none; letter-spacing: 0; font-size: 0.85rem; }
+.field-help { margin-top: 0.1rem; }
+.field-echo { font-size: 0.75rem; min-height: 1.1em; }
+.field-error { color: var(--danger); font-size: 0.78rem; }
+
+.primary-row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 0.5rem; padding: 0.5rem 0; border-top: 1px solid var(--line);
+}
+.integration { font-size: 0.9rem; color: var(--accent); }
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* ----------------------------------------------------------------- jobs */
+
+.job-list { list-style: none; margin: 0.5rem 0 0; padding: 0; display: grid; gap: 0.6rem; }
+.job {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-bright);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  background: var(--panel-2);
+}
+.job[data-state="running"] { border-left-color: var(--amber); }
+.job[data-state="awaiting_confirmation"] { border-left-color: var(--amber); }
+.job[data-state="failed"] { border-left-color: var(--danger); }
+.job[data-state="succeeded"] { border-left-color: var(--accent-soft); }
+.job-head { display: flex; align-items: center; gap: 0.5rem; }
+.job-kind { text-transform: uppercase; font-size: 0.78rem; letter-spacing: 0.08em; }
+.job-elapsed { margin-left: auto; font-size: 0.8rem; color: var(--text-dim); }
+.job-progress { margin: 0.4rem 0 0.2rem; }
+.job-progress-text { font-size: 0.75rem; color: var(--text-dim); }
+.job-error { color: var(--danger); font-size: 0.85rem; }
+.job-result { font-size: 0.82rem; color: var(--text-dim); }
+.job-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; margin-top: 0.3rem; font-size: 0.72rem;
+}
+
+/* --------------------------------------------------------------- config */
+
+.config-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--tap);
+}
+.config-details > summary::before { content: "▸"; color: var(--accent-head); }
+.config-details[open] > summary::before { content: "▾"; }
+.config-details > summary::-webkit-details-marker { display: none; }
+.config-body { margin-top: 0.6rem; }
+
+.config-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem 0.8rem;
+  margin: 0 0 0.7rem;
+}
+.config-group legend {
+  padding: 0 0.4rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-head);
+}
+.config-advanced > summary {
+  cursor: pointer;
+  min-height: var(--tap);
+  display: flex;
+  align-items: center;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.config-actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+.config-status { font-size: 0.85rem; color: var(--text-dim); }
+.config-status[data-tone="ok"] { color: var(--accent); }
+.config-status[data-tone="error"] { color: var(--danger); }
+
+/* -------------------------------------------------------------- browser */
+
+.crumbs {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem;
+  margin: 0.4rem 0; font-size: 0.85rem;
+}
+.crumb-sep { color: var(--text-faint); }
+.crumb-up { margin-left: 0.5rem; }
+
+.link-btn {
+  background: none; border: none; padding: 0.35rem 0.2rem;
+  color: var(--accent); font: inherit; font-size: 0.9rem;
+  cursor: pointer; text-decoration: none; text-align: left;
+}
+.link-btn:hover { text-decoration: underline; }
+
+.section-heading { margin: 0.8rem 0 0.35rem; }
+.plain-list { list-style: none; margin: 0; padding: 0; }
+.file-list { display: grid; gap: 0.2rem; }
+.file-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+  padding: 0.3rem 0; border-bottom: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+.file-kind {
+  min-width: 6.5ch; font-size: 0.68rem; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-faint);
+}
+.file-kind[data-kind="raw"] { color: var(--accent-head); }
+.file-kind[data-kind="preview"],
+.file-kind[data-kind="solved_sidecar"] { color: var(--amber); }
+
+.session-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.7rem;
+}
+.card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem;
+  background: var(--panel-2);
+  display: flex; flex-direction: column; gap: 0.35rem;
+}
+.session-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.session-name { color: var(--text); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.chip {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+.chip[data-chip="light"] { color: var(--accent); border-color: var(--accent-dim); }
+.chip[data-chip="dark"] { color: var(--text-faint); }
+.chip[data-chip="total"] { color: var(--text); }
+
+/* Recorded vs on-disk. A card-only run is NORMAL: it reads as a neutral note,
+   never as an error, because the SD card is the source of truth there. */
+.storage {
+  display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; align-items: baseline;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px dashed var(--line-bright);
+  font-size: 0.8rem;
+}
+.storage-note { flex-basis: 100%; font-size: 0.75rem; color: var(--text-dim); }
+.storage[data-storage="card"] { border-color: var(--amber-dim); }
+.storage[data-storage="card"] .storage-note { color: var(--amber); }
+.storage[data-storage="partial"] { border-color: var(--line-bright); }
+
+.warn { color: var(--amber); font-size: 0.8rem; }
+
+.solved { display: flex; flex-direction: column; gap: 0.3rem; }
+.kv {
+  display: grid; grid-template-columns: auto 1fr; gap: 0.1rem 0.6rem;
+  margin: 0; font-size: 0.8rem;
+}
+.kv dt { color: var(--text-dim); }
+.kv dd { margin: 0; }
+.preview {
+  width: 100%; border-radius: 6px; border: 1px solid var(--line);
+  /* Previews are annotated plate solves — bright by nature. Dim them so a
+     thumbnail cannot flash the observer. Hovering restores full brightness. */
+  filter: brightness(0.55) sepia(0.35) saturate(1.4) hue-rotate(-18deg);
+  transition: filter 0.2s ease;
+}
+.preview:hover { filter: none; }
+.session-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.2rem; }
+
+/* ------------------------------------------------------------ responsive */
+
+@media (max-width: 560px) {
+  .layout { padding: 0.6rem; gap: 0.7rem; }
+  .topbar { padding: 0.5rem 0.6rem; }
+  .camera-status { width: 100%; }
+  /* On a phone the legend is noise — the keyboard is not the input method. */
+  .legend { display: none; }
+  .btn-big { flex-basis: 100%; }
+
+  /* The frame is width-bound here, so every pixel of horizontal padding is a
+     pixel of focus detail lost. Let it bleed to both edges: 233px of frame is
+     not enough to judge a star, which is the entire job. */
+  .panel-live > .viewport-shell {
+    margin-inline: -1.2rem;
+    --live-chrome: 300px;   /* no legend down here, so less has to fit below */
+  }
+  .viewport { border-radius: 0; border-inline-width: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Per-field hint: says what each frame kind is for, so the lens-cap
+   requirement for darks/bias is visible at the point of entry. */
+.field-hint {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: var(--text-dim, #8a5a52);
+  letter-spacing: 0.01em;
+}
+
+/* Zoom bar. Sits between the -/+ buttons; a trackpad has no middle button and
+   two-finger scroll is bound to panning, so this is the primary zoom control
+   for anyone not on the keyboard. */
+.zoom-bar {
+  flex: 1 1 8rem;
+  min-inline-size: 5rem;
+  max-inline-size: 14rem;
+  accent-color: var(--accent);
+  background: transparent;
+  cursor: pointer;
+  block-size: 1.6rem;
+}
+.zoom-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

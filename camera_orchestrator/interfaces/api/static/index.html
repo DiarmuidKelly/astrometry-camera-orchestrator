@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<!-- Dark red for the browser chrome too: a bright address bar at the eyepiece
+     is just as bad for dark adaptation as a bright page. -->
+<meta name="theme-color" content="#0a0406">
+<title>camera-orchestrator</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <h1>camera&#8209;orchestrator</h1>
+    <span class="mono muted" data-version>…</span>
+    <span class="badge" data-mock-flag hidden>mock data</span>
+  </div>
+
+  <div class="camera-status">
+    <span class="dot" data-camera-dot data-state="down" aria-hidden="true"></span>
+    <div>
+      <p class="camera-name" data-camera-text>Checking…</p>
+      <p class="camera-detail mono muted" data-camera-detail>—</p>
+    </div>
+    <button class="btn btn-quiet" type="button" data-camera-reconnect>Reconnect</button>
+  </div>
+</header>
+
+<div class="banner" role="alert" data-banner hidden>
+  <span data-banner-text></span>
+  <button class="btn btn-quiet" type="button" data-banner-dismiss aria-label="Dismiss">✕</button>
+</div>
+
+<main class="layout">
+
+  <!-- ==================================================== LIVE VIEW ==== -->
+  <section class="panel panel-live" data-panel="live" aria-labelledby="live-heading">
+    <h2 class="visually-hidden" id="live-heading">Live view and focus</h2>
+
+    <div class="viewport-shell">
+      <!-- tabindex so the frame can take focus for pointer panning; the key
+           bindings themselves are global (keys.js). -->
+      <div class="viewport" tabindex="0" role="img"
+           aria-label="Camera live view. Use + and - to zoom, arrow keys to pan.">
+        <img class="viewport-img" alt="">
+      </div>
+
+      <!-- Stream trouble / paused-during-capture explanation. -->
+      <div class="live-overlay" data-live-overlay hidden>
+        <p data-live-overlay-text></p>
+        <button class="btn" type="button" data-live-retry>Retry stream</button>
+      </div>
+
+      <!-- Full-attention physical prompt (lens cap). Populated by prompts.js. -->
+      <div class="takeover" data-takeover hidden></div>
+
+      <span class="live-badge" data-live-status data-state="idle">Idle</span>
+      <span class="live-badge live-zoom mono" data-zoom-label>fit</span>
+    </div>
+
+    <!-- The onscreen prompt: what Enter will do, or what is happening now. -->
+    <div class="prompt-bar" data-live-prompt data-tone="idle" aria-live="polite">
+      <p class="prompt-bar-title" data-prompt-title>…</p>
+      <p class="prompt-bar-detail" data-prompt-detail></p>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+           aria-label="Job progress" data-prompt-bar hidden>
+        <div class="bar-fill" data-prompt-bar-fill></div>
+      </div>
+    </div>
+
+
+    <div class="live-controls">
+      <button class="btn btn-primary" type="button" data-live-start data-running="false">
+        Start live view
+      </button>
+      <div class="zoom-controls" role="group" aria-label="Digital zoom">
+        <button class="btn" type="button" data-zoom-out aria-label="Zoom out">−</button>
+        <input class="zoom-bar" type="range" data-zoom-bar
+               min="0" max="4" step="1" value="0"
+               aria-label="Zoom level">
+        <button class="btn" type="button" data-zoom-in aria-label="Zoom in">+</button>
+        <button class="btn btn-quiet" type="button" data-zoom-reset>Reset</button>
+      </div>
+      <label class="inline-field">
+        <span>Stream</span>
+        <select data-live-mode>
+          <option value="stream">MJPEG</option>
+          <option value="poll">Poll frames</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- Always-visible legend: the bindings must be discoverable in the dark. -->
+    <ul class="legend" aria-label="Keyboard shortcuts">
+      <li><kbd>Enter</kbd> fire / confirm</li>
+      <li><kbd>+</kbd><kbd>−</kbd> zoom</li>
+      <li><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> pan</li>
+      <li><kbd>0</kbd> reset zoom</li>
+      <li>click a star to zoom on it</li>
+      <li>two-finger scroll to pan</li>
+      <li><kbd>q</kbd> stop</li>
+    </ul>
+  </section>
+
+  <!-- ====================================================== CAPTURE ==== -->
+  <section class="panel panel-capture" data-panel="capture" aria-labelledby="capture-heading">
+    <h2 id="capture-heading">Capture settings</h2>
+    <p class="muted small">Remembered between sessions — set them once per target.</p>
+
+    <form novalidate>
+      <div class="field-grid">
+        <label class="field field-wide">
+          <span>Session name</span>
+          <input type="text" name="name" placeholder="m33" autocomplete="off" spellcheck="false">
+        </label>
+
+        <label class="field">
+          <span>ISO</span>
+          <input type="text" name="iso" list="iso-choices" inputmode="numeric"
+                 autocomplete="off" spellcheck="false">
+        </label>
+
+        <label class="field">
+          <span>Shutter (s)</span>
+          <input type="text" name="shutter" list="shutter-choices"
+                 autocomplete="off" spellcheck="false">
+        </label>
+
+        <label class="field">
+          <span>Aperture</span>
+          <input type="text" name="aperture" list="aperture-choices"
+                 placeholder="leave blank" autocomplete="off" spellcheck="false">
+        </label>
+
+        <label class="field">
+          <span>Bulb (s)</span>
+          <input type="number" name="bulb_seconds" min="0" step="1" placeholder="—">
+        </label>
+
+
+      </div>
+
+      <fieldset class="field-group">
+        <legend>Shots</legend>
+        <div class="field-grid field-grid-tight">
+          <label class="field">
+            <span>Lights</span>
+            <input type="number" name="lights" min="0" step="1"
+                   aria-describedby="hint-lights">
+            <small id="hint-lights" class="field-hint">frames of the target</small>
+          </label>
+
+          <label class="field">
+            <span>Darks</span>
+            <input type="number" name="darks" min="0" step="1"
+                   aria-describedby="hint-darks">
+            <small id="hint-darks" class="field-hint">lens capped, same ISO + shutter</small>
+          </label>
+
+          <label class="field">
+            <span>Bias</span>
+            <input type="number" name="bias" min="0" step="1"
+                   aria-describedby="hint-bias">
+            <small id="hint-bias" class="field-hint">lens capped, fastest shutter</small>
+          </label>
+
+          <label class="field">
+            <span>Flats</span>
+            <input type="number" name="flats" min="0" step="1"
+                   aria-describedby="hint-flats">
+            <small id="hint-flats" class="field-hint">evenly lit source — Capture only</small>
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="field-grid">
+        <label class="field">
+          <span>Image format</span>
+          <select name="image_format" aria-describedby="hint-format">
+            <option value="">camera default</option>
+            <option value="raw">raw</option>
+            <option value="jpeg">jpeg</option>
+          </select>
+          <small id="hint-format" class="field-hint">
+            Capture only — Align always shoots JPEG, Sequence always RAW
+          </small>
+        </label>
+
+        <label class="field field-wide">
+          <span>Output folder (optional)</span>
+          <input type="text" name="out_dir" placeholder="incoming/…"
+                 autocomplete="off" spellcheck="false">
+        </label>
+
+        <label class="field field-check">
+          <input type="checkbox" name="download">
+          <span>Download to disk (otherwise card&nbsp;only)</span>
+        </label>
+
+        <label class="field field-check">
+          <input type="checkbox" name="force">
+          <span>Force re-solve on align</span>
+          <small class="field-hint">
+            Align only — overwrites a target the session has already shot frames for
+          </small>
+        </label>
+      </div>
+
+      <div class="primary-row">
+        <label class="inline-field">
+          <span><kbd>Enter</kbd> fires</span>
+          <select name="primary">
+            <option value="capture">Capture</option>
+            <option value="align">Align + solve</option>
+            <option value="sequence">Full sequence</option>
+          </select>
+        </label>
+        <output class="mono integration" data-integration>—</output>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary btn-big" type="button" data-action="capture">Capture</button>
+        <button class="btn btn-big" type="button" data-action="align">Align</button>
+        <button class="btn btn-big" type="button" data-action="sequence">Sequence</button>
+      </div>
+    </form>
+
+    <datalist id="iso-choices">
+      <option value="100"></option><option value="200"></option>
+      <option value="400"></option><option value="800"></option>
+      <option value="1600"></option><option value="3200"></option>
+      <option value="6400"></option>
+    </datalist>
+    <datalist id="shutter-choices">
+      <option value="1/4000"></option><option value="1/2000"></option>
+      <option value="1/1000"></option><option value="1/500"></option>
+      <option value="1/250"></option><option value="1/125"></option>
+      <option value="1/60"></option><option value="1"></option>
+      <option value="2"></option><option value="4"></option>
+      <option value="8"></option><option value="15"></option>
+      <option value="30"></option>
+    </datalist>
+    <datalist id="aperture-choices">
+      <option value="1.8"></option><option value="2.8"></option>
+      <option value="4"></option><option value="5.6"></option>
+      <option value="8"></option>
+    </datalist>
+  </section>
+
+  <!-- ========================================================= JOBS ==== -->
+  <section class="panel panel-jobs" data-panel="jobs" aria-labelledby="jobs-heading">
+    <h2 id="jobs-heading">Jobs</h2>
+    <p class="muted small" data-job-empty>Nothing running.</p>
+    <ul class="job-list" data-job-list></ul>
+  </section>
+
+  <!-- ===================================================== SETTINGS ==== -->
+  <section class="panel panel-config" data-panel="config" aria-labelledby="config-heading">
+    <details class="config-details">
+      <summary>
+        <h2 id="config-heading">Settings <span class="mono muted">config.yaml</span></h2>
+      </summary>
+
+      <div class="config-body">
+        <p class="muted small">
+          RA and Dec change per target; everything under Advanced is per&nbsp;rig
+          and set once. A blank field means <em>null</em> — auto or blind — never
+          zero.
+        </p>
+
+        <div data-config-primary></div>
+
+        <details class="config-advanced">
+          <summary>Advanced — solver, optics, location, logging, grab</summary>
+          <div data-config-advanced></div>
+        </details>
+
+        <div class="config-actions">
+          <button class="btn btn-primary btn-big" type="button" data-config-submit>
+            Save config
+          </button>
+          <button class="btn btn-quiet" type="button" data-config-revert>Revert</button>
+          <p class="config-status" data-config-status aria-live="polite"></p>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ====================================================== BROWSER ==== -->
+  <section class="panel panel-browser" data-panel="browser" aria-labelledby="browser-heading">
+    <div class="panel-head">
+      <h2 id="browser-heading">Sessions</h2>
+      <div class="panel-head-actions">
+        <button class="btn btn-quiet" type="button" data-browser-batch>Batch solve folder</button>
+        <button class="btn btn-quiet" type="button" data-browser-refresh>Refresh</button>
+      </div>
+    </div>
+    <nav class="crumbs" data-crumbs aria-label="Folder breadcrumb"></nav>
+    <p class="muted small" data-browser-status></p>
+    <div data-browser-body></div>
+  </section>
+
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

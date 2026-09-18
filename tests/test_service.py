@@ -70,6 +70,11 @@ class MockCamera(Camera):
         self.pending.extend(produced)
         self.card.extend(produced)
 
+    def capture_preview(self) -> bytes:
+        """Canned live-view frame — enough to assert the bytes travel unchanged."""
+        self.calls.append("preview")
+        return b"\xff\xd8fake-jpeg"
+
     def flush_events(self, timeout_ms=None) -> None:
         self.flushes += 1
         self.calls.append("flush")
@@ -160,6 +165,28 @@ def test_card_only_without_record_files_has_no_card_frames():
     result = _service(cam).capture_to_card(_req(count=2))    # record_files defaults False
     assert result.card_frames == []
     assert cam.flushes == 0                                  # fast path untouched
+
+
+def test_reconnect_hook_fires_before_each_card_listing_poll():
+    # A shared session hands back one cached connection, so the card poll only
+    # sees new files if the service forces a real reconnect between attempts.
+    cam = MockCamera(produces=[CameraFile("/store", "IMG.CR2")])
+    reconnects: list[int] = []
+    service = CaptureService(
+        camera_factory=lambda: cam,
+        on_reconnect=lambda: reconnects.append(1),
+    )
+    service.capture_to_card(_req(count=2), record_files=True)
+    assert reconnects                                        # hook actually ran
+    assert len(reconnects) == 1                              # found on first poll, no retry
+
+
+def test_reconnect_hook_is_optional():
+    # The default fresh-camera factory reconnects implicitly, so omitting the
+    # hook must leave the existing CLI path byte-for-byte unchanged.
+    cam = MockCamera(produces=[CameraFile("/store", "IMG.CR2")])
+    result = _service(cam).capture_to_card(_req(count=2), record_files=True)
+    assert result.card_frames == ["IMG.CR2", "IMG_1.CR2"]    # unchanged without a hook
 
 
 def test_capture_to_card_no_download():

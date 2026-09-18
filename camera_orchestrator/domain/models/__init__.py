@@ -1,4 +1,11 @@
 """Domain value objects. Import from here rather than the submodules."""
+from .browse import (
+    DirectoryListing,
+    FileEntry,
+    FileKind,
+    FrameCounts,
+    SessionEntry,
+)
 from .camera import (
     CameraFile,
     CameraStatus,
@@ -22,9 +29,14 @@ __all__ = [
     "CaptureRequest",
     "CaptureResult",
     "CaptureSettings",
+    "DirectoryListing",
+    "FileEntry",
+    "FileKind",
+    "FrameCounts",
     "ImageFormat",
     "ImageExif",
     "ObserverInfo",
+    "SessionEntry",
     "SolveHints",
     "SolveJob",
     "SolveRecord",

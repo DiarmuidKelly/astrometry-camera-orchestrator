@@ -77,6 +77,15 @@ camera_orchestrator/
 main.py                       # entrypoint shim -> interfaces.cli.main
 ```
 
+> **Updated 2026-09-18.** The tree above is the layout as of this document's
+> original migration. The layers and the dependency rule are unchanged, but the
+> contents have grown: `application/` now also holds `align_service`,
+> `sequence_service`, `batch_service`, `browse_service`, `camera_session` and
+> `session_paths`, and `interfaces/` has gained `api/` (FastAPI + the browser
+> front end under `api/static/`) alongside `cli.py`. The second inbound adapter
+> anticipated below now exists. See `CLAUDE.md` for the current listing and
+> `docs/20260916-web-ui-api.md` for the API's design.
+
 ### Placement notes (judgement calls, recorded for the record)
 
 - **`build_hints` lives in application, not domain** — it reads `Config`

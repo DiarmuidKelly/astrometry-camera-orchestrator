@@ -4,7 +4,7 @@ Python tool for plate-solving astrophotography frames using a dockerised [astrom
 
 ## Examples
 
-**M31 Andromeda Galaxy** — 64 × 2s, ISO 3200, 200mm f/4, no tracking mount, Canon 5D Mark II. Stacked in Siril.
+**M31 Andromeda Galaxy** — 64 × 2s, ISO 3200, 200mm f/2.8, no tracking mount, Canon 5D Mark II. Stacked in Siril.
 
 ![Andromeda Galaxy](docs/images/20260914-andromeda.jpg)
 
@@ -168,7 +168,7 @@ card-only by default (fast for bulk sequences); `--download` transfers to `--out
 
 ```bash
 uv run camera-orchestrator capture --status
-   --count 30                 # 30 subs to the card
+uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30                 # 30 subs to the card
 uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30 --download      # download each frame
 uv run camera-orchestrator capture --bulb 30 --count 20 --download                  # 30s bulb subs
 ```
@@ -278,6 +278,26 @@ Integration tests require Docker and astrometry index files:
 ```bash
 make test-integration
 ```
+
+## Deployment (Docker)
+
+A container image is provided for **dependency reproducibility** — `rawpy`,
+`gphoto2` and `opencv` are the awkward wheels, and the image builds them from the
+committed `uv.lock`:
+
+```bash
+make docker-build    # build camera-orchestrator:dev
+make docker-shell    # poke around inside it
+```
+
+Use it for plate-solving (`batch`, `solve`) and CI. **Camera work stays native.**
+gphoto2 claims USB exclusively and the adapter must release the desktop's gvfs
+mount over the session D-Bus first, which a container cannot do — so `capture`,
+`align`, `sequence`, `grab`, live view and the API server all run via `uv run`.
+
+The decision table, the full USB-in-container reasoning and the Docker-in-Docker
+caveat for the solver are in
+[`docs/20260916-deployment.md`](docs/20260916-deployment.md).
 
 ## Status
 

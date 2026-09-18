@@ -1,0 +1,42 @@
+# Keep the build context small and the image free of session data.
+# incoming/ alone can be tens of GB — it must never enter the context.
+
+incoming/
+.venv/
+.git/
+.github/
+tests/
+docs/
+tools/
+
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local secrets/paths — config is mounted in at run time, never baked.
+config.yaml
+.env
+
+# Artefacts that only exist on a working machine.
+*.fits
+*.wcs
+*.jpg
+*.JPG
+*.CR2
+*.cr2
+*.NEF
+
+# Container definitions themselves are not needed inside the context.
+Dockerfile
+.dockerignore
+compose.yaml

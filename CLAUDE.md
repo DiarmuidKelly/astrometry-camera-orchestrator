@@ -10,8 +10,8 @@ Dependencies point **inward**. The rule is non-negotiable:
 
 ```
 interfaces ─▶ application ─▶ domain ◀─ adapters
-   (CLI)        (services)   (ports +     (gphoto2, docker,
-                              models)       astropy, cv2, files)
+ (CLI, API)     (services)   (ports +     (gphoto2, docker,
+                              models)      astropy, cv2, files)
 ```
 
 - **`domain/`** — contracts + pure logic. Imports **nothing external** (no
@@ -23,12 +23,19 @@ interfaces ─▶ application ─▶ domain ◀─ adapters
   libraries live. `camera/` (GphotoCamera, gvfs, cli_grab), `solvers/` (Docker,
   Api, fits I/O), `storage/` (sidecar JSON), `exif.py`.
 - **`application/`** — use-case services depending on **ports only**, never on a
-  concrete adapter. `capture_service.py`, `solve_service.py`, `grab_service.py`.
-- **`interfaces/`** — inbound adapters. `cli.py` (argparse). A future FastAPI
-  layer goes here and calls the same services.
+  concrete adapter. `capture_service.py`, `align_service.py`,
+  `sequence_service.py`, `batch_service.py`, `solve_service.py`,
+  `browse_service.py`, `camera_session.py`, `session_paths.py`,
+  `grab_service.py`.
+- **`interfaces/`** — inbound adapters. `cli.py` (argparse) and `api/` (FastAPI +
+  the browser front end in `api/static/`). Both build the same DTOs and call the
+  same services; neither holds use-case logic.
 - **`composition.py`** — the ONLY module that knows a port *and* its concrete
   adapter. All wiring/DI lives here (`build_camera`, `build_solver`,
-  `build_capture_service`, `build_repository`).
+  `build_capture_service`, `build_repository`, …). Note the `build_shared_*`
+  variants: they wire services onto the single `CameraSession` instead of opening
+  a fresh connection per call, which is what lets live view and a capture share
+  the one USB claim. The API uses those; the CLI uses the plain ones.
 - `config.py` (infra config), `log/` (logging), `main.py` (entrypoint shim).
 
 Full rationale: `docs/20260722-hexagonal-architecture.md`.
@@ -56,6 +63,30 @@ Full rationale: `docs/20260722-hexagonal-architecture.md`.
   `Camera` ABC) via `CaptureService(camera_factory=...)`; `MockSolver` for solves.
 - Patch adapters at their *new* module home (e.g.
   `camera_orchestrator.application.grab_service.download`).
+
+## Web API notes
+
+- **One process owns the camera.** `build_camera_session()` is a process-wide
+  singleton because libgphoto2 claims the USB device exclusively. **Never run
+  uvicorn with `--workers > 1`** — the second worker is a separate process and
+  fails with `[-53] Could not claim the USB device`, at runtime rather than
+  start-up, so it looks like flaky hardware. Threads are fine; that is what the
+  session is for.
+- **Live view is gated on `CameraSession.in_use`** — an actual borrow — not on
+  job state. An align spends most of its life plate-solving with the camera idle;
+  gating on "a camera job is running" blanked the stream for the whole solve.
+- **Long-running verbs are jobs, not requests.** A sequence runs for hours and an
+  align takes 10-90s, so the routes hand work to a worker thread and return a
+  `Job`. Progress goes over the single WebSocket.
+- **One WebSocket, never a stream per job.** Browsers cap HTTP/1.1 at ~6
+  connections per origin; live view permanently holds one. A stream per job
+  exhausted the budget, and an exhausted budget *queues* rather than failing, so
+  it presents as a hang. Do not reintroduce per-job streams.
+- **The lens-cap confirmation is prompt-scoped.** `JobPrompt` carries a token and
+  `confirm` is refused without the current one. Without that, a stray confirm
+  pre-armed the *next* prompt and darks/bias were shot with the lens uncapped.
+- Security posture and what is deliberately not implemented: `SECURITY.md`.
+  Design rationale: `docs/20260916-web-ui-api.md`.
 
 ## Guardrails (must stay green)
 
@@ -115,4 +146,7 @@ uv run camera-orchestrator grab --poll 5
 uv run camera-orchestrator capture --status
 uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30            # card-only
 uv run camera-orchestrator capture --iso 800 --shutter 2 --count 30 --download # to disk
+
+uv run camera-orchestrator serve                  # web UI on http://127.0.0.1:8000
+uv run camera-orchestrator serve --host 0.0.0.0   # reachable from a phone (no auth — see SECURITY.md)
 ```

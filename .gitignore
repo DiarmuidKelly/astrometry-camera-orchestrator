@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 config.yaml
+.env
 .coverage
 htmlcov/
 incoming/
@@ -12,3 +13,4 @@ incoming/
 *.fits
 *.wcs
 tools/
+*.log
