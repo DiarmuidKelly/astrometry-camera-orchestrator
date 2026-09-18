@@ -282,7 +282,7 @@ export async function mockFetch(path, { method = "GET", body = null } = {}) {
     if (!job) throw new Error(`No such job: ${id}`);
     // The REST fallback the socket uses while reconnecting — same effect, so it
     // goes through the same helpers and broadcasts to every fake socket.
-    if (action === "confirm") return mockConfirm(id);
+    if (action === "confirm") return mockConfirm(id, body?.token);
     if (action === "cancel") return mockCancel(id);
     return job;
   }
@@ -342,6 +342,8 @@ function driveMockJob(job) {
       job.prompt = {
         kind: "lens_cap",
         message: "Cover the lens (and the viewfinder) before dark frames begin.",
+        // The real server mints one per prompt and refuses a confirm without it.
+        token: `${job.id}-prompt-${tick}`,
       };
       broadcast(job);
       return;
@@ -374,9 +376,14 @@ function driveMockJob(job) {
   }, 700);
 }
 
-function mockConfirm(id) {
+function mockConfirm(id, token) {
   const job = jobs.get(id);
   if (!job) throw new Error(`No such job: ${id}`);
+  // Mirrors the server: only the prompt on screen may be answered.
+  if (job.state !== "awaiting_confirmation") return job;
+  if (token !== job.prompt?.token) {
+    throw new Error("confirmation token does not match the pending prompt");
+  }
   job.prompt = null;
   job.state = "running";
   broadcast(job);
@@ -401,7 +408,7 @@ function mockConnectJobs(handlers = {}) {
     handlers.onSnapshot?.(Array.from(jobs.values()).map((job) => ({ ...job })));
   }, 60);
   return {
-    confirm: async (id) => mockConfirm(id),
+    confirm: async (id, token) => mockConfirm(id, token),
     cancel: async (id) => mockCancel(id),
     close: () => sockets.delete(socket),
   };

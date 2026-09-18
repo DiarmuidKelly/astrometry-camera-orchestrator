@@ -16,7 +16,12 @@ Three rules the registry enforces:
   callback parks the job in `awaiting_confirmation` on a `threading.Event` until
   a `confirm` arrives (on the job socket, or `POST /api/jobs/{id}/confirm`), with
   a generous timeout so a closed browser tab fails the job instead of wedging the
-  camera for the night.
+  camera for the night. Confirmation is **prompt-scoped**: each prompt carries a
+  fresh token and only a confirm quoting that token releases it. A confirm that
+  arrives while the job is `running` (a double-click, an impatient second press,
+  a command replayed after a socket reconnect) is a no-op instead of arming the
+  Event for the *next* prompt — which would have shot a bias phase with the lens
+  uncapped and recorded the frames as valid calibration.
 - **Cancellation is cooperative.** libgphoto2 calls cannot be interrupted, so a
   cancel sets a flag; runners observe it at their progress callbacks (between
   frames, between images) and raise out of the service.
@@ -28,6 +33,7 @@ has nothing to persist.
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -73,6 +79,15 @@ class JobNotFoundError(Exception):
     """No job with that id exists in this process (404)."""
 
 
+class JobPromptMismatchError(Exception):
+    """A confirm quoted a token that is not the pending prompt's (409).
+
+    Means the client answered a prompt that has already been superseded — a
+    replayed command, or a second tab still showing the previous phase. Refusing
+    it is the point: the live prompt must be answered deliberately.
+    """
+
+
 class JobCancelledError(Exception):
     """Raised inside a runner when the job has been cancelled.
 
@@ -98,9 +113,16 @@ class _Record:
 
     def __init__(self, job: Job):
         self.job = job
+        # The worker running it, so shutdown() can join it. Daemon threads are
+        # killed without unwinding at interpreter exit, so waiting for their
+        # `finally` blocks has to be an explicit step.
+        self.thread: threading.Thread | None = None
         self.version = 0
         self.cancel = threading.Event()
         self.confirm = threading.Event()
+        # The token of the prompt currently on the wire, None when nothing is
+        # being asked. Only a confirm quoting it may set `confirm`.
+        self.confirm_token: str | None = None
 
 
 class JobContext:
@@ -134,18 +156,25 @@ class JobContext:
     def prompt(self, kind: str, message: str) -> None:
         """Park the job in `awaiting_confirmation` and block until confirmed.
 
+        The Event is cleared and a fresh token minted *before* the prompt is
+        published, so nothing that happened earlier in the run can answer this
+        question. Clearing after the wait (as this once did) left a confirm that
+        landed while the job was `running` armed for the next phase — the lens
+        would still be uncapped when the bias frames were shot.
+
         Raises:
             JobCancelledError: The job was cancelled while waiting.
             TimeoutError: Nobody confirmed within the registry's timeout.
         """
         self.check_cancelled()
+        token = self._registry._arm_prompt(self._record)
         self._registry._update(
             self._record,
             state="awaiting_confirmation",
-            prompt=JobPrompt(kind=kind, message=message),
+            prompt=JobPrompt(kind=kind, message=message, token=token),
         )
         confirmed = self._record.confirm.wait(self._registry.confirm_timeout)
-        self._record.confirm.clear()
+        self._registry._disarm_prompt(self._record)
         self._registry._update(self._record, state="running", prompt=None)
         self.check_cancelled()
         if not confirmed:
@@ -256,15 +285,44 @@ class JobRegistry:
         thread = threading.Thread(
             target=self._run, args=(record, runner),
             name=f"job-{kind}-{record.job.id[:8]}", daemon=True)
+        record.thread = thread
         thread.start()
         return snapshot
 
-    def confirm(self, job_id: str) -> Job:
-        """Release a job blocked on a prompt. A no-op for any other state."""
+    def confirm(self, job_id: str, token: str | None = None) -> Job:
+        """Release a job blocked on the prompt identified by `token`.
+
+        A no-op for any other state — a confirm that lands while the job is
+        `running` must not arm the Event for the next phase, which is how a
+        double-click used to answer the bias prompt before anybody had capped the
+        lens.
+
+        Cheap by construction (a mutex acquire plus an Event.set), so callers
+        run it inline on the event loop rather than bridging it to a worker
+        thread; see routes_jobs.
+
+        Args:
+            job_id: Job to release.
+            token: The `prompt.token` the client was showing. Required while a
+                prompt is pending.
+
+        Raises:
+            JobNotFoundError: No such job.
+            JobPromptMismatchError: The token does not match the live prompt.
+        """
         with self._cond:
             record = self._require(job_id)
-        record.confirm.set()
-        return self.get(job_id)
+            if record.job.state != "awaiting_confirmation":
+                log.info("Ignoring confirm for a job that is not waiting",
+                         extra={"job": job_id, "state": record.job.state})
+                return record.job.model_copy(deep=True)
+            if token != record.confirm_token:
+                raise JobPromptMismatchError(
+                    f"confirmation token does not match job {job_id}'s pending prompt — "
+                    f"answer the prompt currently on screen"
+                )
+            record.confirm.set()
+            return record.job.model_copy(deep=True)
 
     def cancel(self, job_id: str) -> Job:
         """Request cancellation. Cooperative — see the module docstring.
@@ -272,6 +330,10 @@ class JobRegistry:
         A job that has not started yet ends immediately; one waiting on a prompt
         is woken and unwinds; a running one stops at its next progress callback.
         Terminal jobs are returned unchanged (cancel is idempotent).
+
+        Like `confirm`, this is a mutex acquire plus an Event.set — run it inline
+        rather than on a worker thread, so the one control that releases a wedged
+        camera never queues behind an exhausted thread limiter.
         """
         with self._cond:
             record = self._require(job_id)
@@ -280,6 +342,37 @@ class JobRegistry:
         record.cancel.set()
         record.confirm.set()  # unblock a prompt so the runner can observe the cancel
         return self.get(job_id)
+
+    def shutdown(self, timeout: float = 5.0) -> None:
+        """Stop every active job and wait (briefly) for its thread to unwind.
+
+        The process is going away. Runners are daemon threads, which CPython does
+        **not** unwind at interpreter shutdown, so without this their `finally`
+        blocks never run — and those are what release the camera borrow. Nothing
+        else can close the USB session while a borrow is still held.
+
+        Args:
+            timeout: Total seconds to spend joining, shared across all threads.
+                Bounded: a libgphoto2 call cannot be interrupted, so a runner
+                inside one must not be able to hold the process open.
+        """
+        with self._cond:
+            records = [r for r in self._records.values() if r.job.state in ACTIVE_STATES]
+        for record in records:
+            log.info("Cancelling job for shutdown",
+                     extra={"job": record.job.id, "kind": record.job.kind})
+            record.cancel.set()
+            record.confirm.set()
+
+        deadline = time.monotonic() + timeout
+        for record in records:
+            thread = record.thread
+            if thread is None:
+                continue
+            thread.join(max(deadline - time.monotonic(), 0.0))
+            if thread.is_alive():
+                log.warning("Job thread did not stop in time",
+                            extra={"job": record.job.id, "kind": record.job.kind})
 
     # -- worker ------------------------------------------------------------
 
@@ -308,6 +401,19 @@ class JobRegistry:
                          result=_encode(result))
 
     # -- internals ---------------------------------------------------------
+
+    def _arm_prompt(self, record: _Record) -> str:
+        """Clear any stale confirm and mint this prompt's token. Returns the token."""
+        with self._cond:
+            record.confirm.clear()
+            record.confirm_token = uuid.uuid4().hex
+            return record.confirm_token
+
+    def _disarm_prompt(self, record: _Record) -> None:
+        """Retire the pending prompt — a later confirm quoting it is refused."""
+        with self._cond:
+            record.confirm.clear()
+            record.confirm_token = None
 
     def _require(self, job_id: str) -> _Record:
         """The record for `job_id`. Caller holds the lock."""

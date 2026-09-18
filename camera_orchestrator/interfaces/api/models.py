@@ -47,10 +47,22 @@ class JobProgress(BaseModel):
 
 
 class JobPrompt(BaseModel):
-    """A question the job is blocked on until POST /api/jobs/{id}/confirm."""
+    """A question the job is blocked on until POST /api/jobs/{id}/confirm.
+
+    The `token` scopes the answer to *this* question: a confirm that does not
+    quote it is refused, so a stale or replayed confirm cannot race ahead and
+    release the next phase before the lens has been capped.
+    """
 
     kind: str = Field(description="What is being asked. For a sequence this is the phase kind: 'dark' or 'bias'.")
     message: str = Field(description="Text to show the user, e.g. 'Cover the lens for dark frames'.")
+    token: str = Field(description="Opaque per-prompt token. Echo it back on confirm; a confirm without it is refused.")
+
+
+class ConfirmBody(BaseModel):
+    """POST /api/jobs/{id}/confirm — which prompt is being answered."""
+
+    token: Optional[str] = Field(default=None, description="The `prompt.token` of the prompt being answered.")
 
 
 class Job(BaseModel):

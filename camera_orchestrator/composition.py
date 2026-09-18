@@ -64,6 +64,19 @@ def build_camera_session() -> CameraSession:
         return _session
 
 
+def close_camera_session() -> None:
+    """Close the process-wide session and forget it. Safe if none was built.
+
+    The next build_camera_session() opens a fresh one, so this is also the right
+    thing to call from a test tearing down a session it installed.
+    """
+    global _session
+    with _session_lock:
+        session, _session = _session, None
+    if session is not None:
+        session.close()
+
+
 def build_shared_camera() -> Camera:
     """Borrow the shared session's camera — a non-closing proxy.
 
@@ -125,6 +138,12 @@ def build_shared_sequence_service() -> SequenceService:
     return SequenceService(build_shared_capture_service(), build_session_repository())
 
 
-def build_browse_service(cfg: Config) -> BrowseService:
-    """BrowseService confined to the configured capture root (grab.out_dir)."""
-    return BrowseService(build_session_repository(), cfg.grab.out_dir)
+def build_browse_service(root: str) -> BrowseService:
+    """BrowseService confined to `root`.
+
+    Takes the root itself rather than a Config on purpose: `grab.out_dir` is
+    writable over the API, so sourcing the confinement root from the live config
+    let one `PUT /api/config` move it (to `/`, say) and made the confinement
+    decorative. The API fixes the root once at `serve` time and passes it here.
+    """
+    return BrowseService(build_session_repository(), root)

@@ -84,9 +84,21 @@ def get_sequence_service() -> SequenceService:
     return build_shared_sequence_service()
 
 
-def get_browse_service(cfg: Config = Depends(get_config)) -> BrowseService:
-    """BrowseService confined to the configured capture root."""
-    return build_browse_service(cfg)
+def get_browse_root(request: Request) -> str:
+    """The capture root, fixed when the app was created.
+
+    Read from `app.state`, never from the live config: `grab.out_dir` is writable
+    through `PUT /api/config`, and a root that a request can move confines
+    nothing. A config write changes where *new* captures default to; it does not
+    change what the API is allowed to read or write.
+    """
+    root: str = request.app.state.browse_root
+    return root
+
+
+def get_browse_service(root: str = Depends(get_browse_root)) -> BrowseService:
+    """BrowseService confined to the fixed capture root."""
+    return build_browse_service(root)
 
 
 def get_solve_repository() -> SolveRecordRepository:

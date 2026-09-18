@@ -219,22 +219,33 @@ export class CapturePanel {
         count: this.counts()[first],
         kind: first,
         download: Boolean(v.download),
-        select: v.select || null,
+        ...(v.select ? { select: v.select } : {}),
       };
       submit = startCapture;
     }
 
     this.setBusy(true);
+    let job;
     try {
-      const job = await submit(body);
-      this.onJob(job, body);
-      return job;
+      job = await submit(omitEmpty(body));
     } catch (err) {
+      // Nothing was created, so this panel owns the buttons again.
+      this.setBusy(false);
       this.onError(err);
       return null;
-    } finally {
-      this.setBusy(false);
     }
+    // From here the JOB LAYER owns the disabled state — it disables on track()
+    // and re-enables when the job reaches a terminal state. Clearing busy here
+    // (the old `finally`) re-opened the buttons ~130 ms after the click, before
+    // the next socket push could disable them again, and a second click inside
+    // that window fired a second, unwanted capture.
+    try {
+      this.onJob(job, body);
+    } catch (err) {
+      this.setBusy(false); // the handover failed; don't strand the buttons
+      this.onError(err);
+    }
+    return job;
   }
 }
 
@@ -257,4 +268,22 @@ function numberOrNull(raw) {
   if (raw === "" || raw === null || raw === undefined) return null;
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Drop keys the user left blank so the server applies its own defaults.
+ *
+ * Sending `null` is only equivalent to omitting for fields typed Optional. A
+ * field with a non-null default (`select`, `count`, `kind`) rejects null with a
+ * 422, which is how the capture form silently 422'd against the real server
+ * while working fine against mock.js — the mock does not validate bodies.
+ *
+ * Deliberately NOT applied to the config PUT: there `null` is meaningful
+ * (`focal_mm: null` means "read the focal length from EXIF"), and stripping it
+ * would change what the user asked for.
+ */
+function omitEmpty(body) {
+  return Object.fromEntries(
+    Object.entries(body).filter(([, v]) => v !== null && v !== undefined),
+  );
 }

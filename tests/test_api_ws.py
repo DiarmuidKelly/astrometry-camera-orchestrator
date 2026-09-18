@@ -14,7 +14,12 @@ from __future__ import annotations
 
 import time
 
+import anyio
+import pytest
+
 from camera_orchestrator.interfaces.api import routes_ws
+from camera_orchestrator.interfaces.api.jobs import JobRegistry
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from tests.test_api_jobs import (
@@ -32,29 +37,38 @@ from tests.test_service import MockCamera
 # of idling out the tick after every test.
 routes_ws.WS_TICK_S = 0.2
 
-# How many messages a test will read before giving up waiting for one it wants.
-# Generous because heartbeats are interleaved at this tick rate.
-MESSAGE_BUDGET = 400
+# How long a test waits for the message it wants. Wall-clock, not a message
+# count: counting messages meant a heartbeat-only socket burned budget × tick
+# (400 × 0.2 s = 80 s) before reporting a failure that was knowable in seconds.
+READ_TIMEOUT_S = 20.0
 
 
-def _read(websocket, wanted: str, *, budget: int = MESSAGE_BUDGET) -> dict:
+@pytest.fixture
+def anyio_backend():
+    """The async tests here drive the watcher directly; asyncio is what ships."""
+    return "asyncio"
+
+
+def _read(websocket, wanted: str, *, timeout: float = READ_TIMEOUT_S) -> dict:
     """The next message of type `wanted`, skipping heartbeats and other traffic."""
-    for _ in range(budget):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         message = websocket.receive_json()
         if message["type"] == wanted:
             return message
-    raise AssertionError(f"no {wanted!r} message within {budget} messages")
+    raise AssertionError(f"no {wanted!r} message within {timeout}s")
 
 
-def _read_until(websocket, job_id: str, *states: str, budget: int = MESSAGE_BUDGET) -> dict:
+def _read_until(websocket, job_id: str, *states: str, timeout: float = READ_TIMEOUT_S) -> dict:
     """Follow `job_id` on the socket until it reports one of `states`."""
-    for _ in range(budget):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         message = websocket.receive_json()
         jobs = [message["job"]] if message["type"] in ("job", "ack") else message.get("jobs", [])
         for job in jobs:
             if job["id"] == job_id and job["state"] in states:
                 return job
-    raise AssertionError(f"job {job_id} never reached {states}")
+    raise AssertionError(f"job {job_id} never reached {states} within {timeout}s")
 
 
 def _start_capture(client: TestClient, tmp_path, count: int = 1) -> str:
@@ -151,8 +165,11 @@ def test_confirm_over_the_socket_releases_the_lens_cap_prompt(tmp_path):
         assert waiting["prompt"]["kind"] == "dark"
 
         # The prompt is answered on the same connection — no extra request, and
-        # so no extra connection, which is what the old per-job design cost.
-        websocket.send_json({"type": "confirm", "job_id": job_id})
+        # so no extra connection, which is what the old per-job design cost. The
+        # token is echoed from the prompt being displayed, so the answer cannot
+        # drift onto a later question.
+        websocket.send_json({"type": "confirm", "job_id": job_id,
+                             "token": waiting["prompt"]["token"]})
         done = _read_until(websocket, job_id, "succeeded")
 
     assert done["prompt"] is None
@@ -169,10 +186,34 @@ def test_cancel_over_the_socket_cancels_the_job(tmp_path):
         assert camera.firing.wait(STATE_TIMEOUT_S)
 
         websocket.send_json({"type": "cancel", "job_id": job_id})
+        # Wait for the ack before letting the shutter go. Releasing first raced
+        # the command: the frames finished, the job succeeded, and the test
+        # failed about one run in five (and burned the full read budget doing it).
+        assert _read(websocket, "ack")["command"] == "cancel"
         camera.released.set()  # cancellation is cooperative: let the shutter finish
         cancelled = _read_until(websocket, job_id, "cancelled")
 
     assert cancelled["error"] is None                   # cancelled, not failed
+
+
+def test_a_socket_confirm_without_the_prompts_token_is_refused(tmp_path):
+    # The socket path enforces the same rule as POST /confirm: a replayed command
+    # (a reconnect that re-sends what the tab was showing) must not release a
+    # phase nobody has capped the lens for.
+    client = _sequence_client(MockCamera())
+    with client.websocket_connect("/api/ws") as websocket:
+        _read(websocket, "snapshot")
+        job_id = client.post(
+            "/api/jobs/sequence", json={"out_dir": str(tmp_path), "darks": 1}).json()["id"]
+        waiting = _read_until(websocket, job_id, "awaiting_confirmation")
+
+        websocket.send_json({"type": "confirm", "job_id": job_id, "token": "stale"})
+        assert "token" in _read(websocket, "error")["message"]
+
+        # The socket is still usable and the real token still works.
+        websocket.send_json({"type": "confirm", "job_id": job_id,
+                             "token": waiting["prompt"]["token"]})
+        _read_until(websocket, job_id, "succeeded")
 
 
 def test_a_command_is_acknowledged_to_the_client_that_sent_it(tmp_path):
@@ -258,6 +299,54 @@ def test_the_per_job_sse_route_is_gone(tmp_path):
     assert client.get(f"/api/jobs/{job_id}/events").status_code == 404
 
 
+# -- dropped frames --------------------------------------------------------
+
+
+def _finished_job(registry: JobRegistry) -> str:
+    """Submit a trivial job and wait for it to reach a terminal state."""
+    job = registry.submit("batch", lambda ctx: "done")
+    deadline = time.monotonic() + STATE_TIMEOUT_S
+    while time.monotonic() < deadline:
+        if registry.get(job.id).state == "succeeded":
+            return job.id
+        time.sleep(0.01)
+    raise AssertionError("the job never finished")
+
+
+@pytest.mark.anyio
+async def test_a_dropped_job_update_forces_a_full_resync(tmp_path):
+    """A drop must not be recorded as a send.
+
+    `_push` drops on a full buffer and `_watch` used to merge the whole payload
+    into `sent` regardless, so the next diff excluded the dropped job. For a
+    job's *terminal* frame there is no next update to recover on, and the UI sat
+    on `running` for a job that had finished — the exact failure the one-socket
+    redesign existed to remove.
+    """
+    registry = JobRegistry()
+    # One slot, and nothing reading it: the stalled-client case, deterministically.
+    send, receive = anyio.create_memory_object_stream[dict](1)
+
+    async with send, receive, anyio.create_task_group() as tg:
+        tg.start_soon(routes_ws._watch, registry, send)
+        await anyio.sleep(routes_ws.WS_TICK_S)     # the snapshot takes the only slot
+
+        job_id = await anyio.to_thread.run_sync(_finished_job, registry)
+        await anyio.sleep(routes_ws.WS_TICK_S * 2)  # its updates are pushed, and dropped
+
+        stalled = receive.receive_nowait()          # the client finally drains
+        assert stalled["type"] == "snapshot" and stalled["jobs"] == []
+
+        with anyio.fail_after(STATE_TIMEOUT_S):
+            while True:
+                message = await receive.receive()
+                jobs = (message.get("jobs") or []) if message["type"] == "snapshot" else (
+                    [message["job"]] if message["type"] == "job" else [])
+                if any(job["id"] == job_id and job["state"] == "succeeded" for job in jobs):
+                    break                           # the terminal state came back round
+        tg.cancel_scope.cancel()
+
+
 # -- the registry primitive ------------------------------------------------
 
 
@@ -288,3 +377,76 @@ def test_wait_any_returns_on_its_timeout_when_nothing_changes():
     # A timeout is not an error — it is the watcher's heartbeat tick.
     assert unchanged == revision and jobs == []
     assert time.monotonic() - started >= 0.05
+
+
+# -- cross-site WebSocket hijacking ---------------------------------------
+
+
+def _connect(client: TestClient, origin: str | None):
+    """Open the job socket, optionally claiming to be a page from `origin`."""
+    headers = {} if origin is None else {"origin": origin}
+    return client.websocket_connect("/api/ws", headers=headers)
+
+
+def test_a_foreign_origin_is_rejected_before_the_handshake_completes():
+    """The one (A) finding: any page you visit could otherwise read and control jobs.
+
+    WebSockets are exempt from the same-origin policy, so evil.example's script
+    gets a *working* socket to 127.0.0.1 unless the server refuses the
+    handshake — one that hands back the whole job snapshot (session paths, file
+    names, the target's RA/Dec) and takes `cancel` and `confirm`.
+    """
+    client = _client()
+    with pytest.raises(WebSocketDisconnect) as rejected:
+        with _connect(client, "https://evil.example") as websocket:
+            websocket.receive_json()               # never reached: never accepted
+    assert rejected.value.code == 1008             # policy violation, not a protocol error
+
+
+def test_a_lookalike_origin_is_rejected():
+    # Substring matching would have let this through: the Host is a *prefix* of
+    # the attacker's domain, and the two are entirely different origins.
+    client = _client()
+    with pytest.raises(WebSocketDisconnect):
+        with _connect(client, "http://testserver.evil.example") as websocket:
+            websocket.receive_json()
+
+
+def test_the_pages_own_origin_is_accepted(tmp_path):
+    # The UI itself: served from the host the request arrived on. TestClient
+    # sends Host: testserver, which is what the front end's origin would be.
+    with _connect(_client(), "http://testserver") as websocket:
+        assert _read(websocket, "snapshot")["jobs"] == []
+
+
+def test_a_client_without_an_origin_is_accepted():
+    # curl, a script, a future native app: no browser, no ambient authority to
+    # abuse, and nothing to protect them from.
+    with _connect(_client(), None) as websocket:
+        assert _read(websocket, "snapshot")["type"] == "snapshot"
+
+
+def test_origin_allowed_compares_scheme_host_and_port():
+    """The comparison itself, away from the socket — each case is a real bypass.
+
+    The Host header is the reference on purpose: bound to 0.0.0.0 and reached
+    from a phone, the page's origin is the LAN IP the phone typed, and nothing
+    in config knows that address.
+    """
+    allowed = routes_ws.origin_allowed
+
+    # The phone-over-LAN case: origin and Host agree, so it is the same server.
+    assert allowed("http://192.0.2.10:8000", "192.0.2.10:8000") is True
+    assert allowed("http://cam.example:8000", "cam.example:8000") is True
+
+    # Loopback is inside the trust boundary whatever port it came from.
+    assert allowed("http://localhost:5173", "127.0.0.1:8000") is True
+    assert allowed("http://127.0.0.1:8000", "127.0.0.1:8000") is True
+
+    # A different port on the same host is a different origin.
+    assert allowed("http://cam.example:9000", "cam.example:8000") is False
+    # ...as is a different scheme's default port.
+    assert allowed("https://cam.example", "cam.example:8000") is False
+    # ...and an opaque origin, which is what a sandboxed iframe sends.
+    assert allowed("null", "cam.example:8000") is False
+    assert allowed("file://", "cam.example:8000") is False

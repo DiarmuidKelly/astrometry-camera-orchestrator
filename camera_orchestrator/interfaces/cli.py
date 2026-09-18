@@ -279,16 +279,20 @@ def cmd_serve(args: argparse.Namespace, cfg: Config) -> None:
     if args.reload:
         # --reload needs an import string so the reloader can re-import the app
         # in its child process; the config path travels via the environment.
-        from camera_orchestrator.interfaces.api.app import CONFIG_ENV_VAR
+        from camera_orchestrator.interfaces.api.app import CONFIG_ENV_VAR, HOST_ENV_VAR
 
         os.environ[CONFIG_ENV_VAR] = args.config
+        os.environ[HOST_ENV_VAR] = args.host
         uvicorn.run("camera_orchestrator.interfaces.api.app:reloadable_app",
                     host=args.host, port=args.port, reload=True, factory=True,
                     log_level=cfg.logging.level.lower())
         return
 
-    uvicorn.run(create_app(cfg, config_path=args.config), host=args.host, port=args.port,
-                log_level=cfg.logging.level.lower())
+    # bind_host fixes the Host allow-list, and the browse root is frozen from the
+    # config read at startup — both are start-time facts, so they are settled
+    # here rather than per request.
+    uvicorn.run(create_app(cfg, config_path=args.config, bind_host=args.host),
+                host=args.host, port=args.port, log_level=cfg.logging.level.lower())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -374,8 +378,10 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--host", default="127.0.0.1",
                      help="Interface to bind (default: 127.0.0.1, this machine only). "
                           "Use --host 0.0.0.0 to expose it to the LAN so a phone at the "
-                          "scope can reach it — there is no authentication, so only do "
-                          "that on a network you trust.")
+                          "scope can reach it. There is no authentication: anyone who can "
+                          "reach the port can drive the camera, start and cancel "
+                          "exposures, and browse and download the whole capture tree, "
+                          "images included. Only do that on a network you trust.")
     srv.add_argument("--port", type=int, default=8000, help="Port to listen on (default: 8000)")
     srv.add_argument("--reload", action="store_true",
                      help="Reload on source changes (development only)")

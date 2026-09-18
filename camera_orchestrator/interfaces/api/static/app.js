@@ -50,17 +50,38 @@ function main() {
   let capture = null;
   let browser = null;
 
+  /**
+   * Whether the user wants live view running. ONE variable, and the button is
+   * rendered from it.
+   *
+   * It used to live in three places at once — `liveView.running`, the button's
+   * `data-running` and `data-wasRunning` — with the DOM dataset treated as the
+   * truth by the key bindings. Any path that started the stream without going
+   * through here (the retry button did) left the button saying "Start live
+   * view" while the stream ran, and `q` then refused to stop it: the camera sat
+   * in live view with the mirror up, unattended.
+   */
+  let liveRunning = false;
+  /** Streaming was suspended because the tab went to the background. */
+  let liveSuspended = false;
+
+  const renderLiveButton = () => {
+    startBtn.textContent = liveRunning ? "Stop live view  (q)" : "Start live view";
+    startBtn.dataset.running = String(liveRunning);
+  };
+
   const setLiveRunning = (running) => {
-    startBtn.textContent = running ? "Stop live view  (q)" : "Start live view";
-    startBtn.dataset.running = String(running);
+    liveRunning = running;
+    if (!running) liveSuspended = false;
+    renderLiveButton();
     if (running) liveView.start();
     else liveView.stop();
     updatePrompt();
   };
-  startBtn.addEventListener("click", () => {
-    setLiveRunning(startBtn.dataset.running !== "true");
-  });
-  qs("[data-live-retry]").addEventListener("click", () => liveView.start());
+  startBtn.addEventListener("click", () => setLiveRunning(!liveRunning));
+  // Retry goes through the same door as the button: starting the stream by any
+  // other route desyncs the label and the q key from what the camera is doing.
+  qs("[data-live-retry]").addEventListener("click", () => setLiveRunning(true));
   modeSelect.addEventListener("change", () => liveView.setMode(modeSelect.value));
 
   // The mock live view is a generated still, so it has to be polled.
@@ -72,12 +93,12 @@ function main() {
   // Stop streaming while the tab is hidden: it holds the camera open for
   // nothing and the body will happily power itself off mid-session.
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden && startBtn.dataset.running === "true") {
+    if (document.hidden && liveRunning) {
       liveView.stop();
-      startBtn.dataset.wasRunning = "true";
-    } else if (!document.hidden && startBtn.dataset.wasRunning === "true") {
-      startBtn.dataset.wasRunning = "false";
-      liveView.start();
+      liveSuspended = true;
+    } else if (!document.hidden && liveSuspended) {
+      liveSuspended = false;
+      if (liveRunning) liveView.start();
     }
   });
 
@@ -185,7 +206,7 @@ function main() {
 
     liveView.setPrompt({
       title: `Enter → ${capture.describePrimary()}`,
-      detail: `${capture.describeIntegration()} · +/- zoom · arrows pan · f resets peak`,
+      detail: `${capture.describeIntegration()} · +/− zoom · arrows pan · 0 resets zoom`,
       tone: "idle",
     });
   }
@@ -204,7 +225,13 @@ function main() {
       capture.fire();
     },
     stop: () => {
-      if (startBtn.dataset.running === "true") setLiveRunning(false);
+      if (liveRunning) setLiveRunning(false);
+    },
+    // Escape dismisses rather than stops: close the banner, then hand focus
+    // back to the page so the global bindings are live again.
+    dismiss: () => {
+      banner.hidden = true;
+      document.activeElement?.blur?.();
     },
   });
 
@@ -256,7 +283,7 @@ function main() {
     try {
       await reconnectCamera();
       await refreshStatus();
-      if (startBtn.dataset.running === "true") liveView.start();
+      if (liveRunning) liveView.start();
     } catch (err) {
       showError(err);
     } finally {

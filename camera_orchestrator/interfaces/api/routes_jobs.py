@@ -19,11 +19,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException
 
 from camera_orchestrator.application.align_service import AlignService
 from camera_orchestrator.application.batch_service import BatchSolveResult, BatchSolveService
+from camera_orchestrator.application.browse_service import BrowsePathError, BrowseService
 from camera_orchestrator.application.capture_service import CaptureService
 from camera_orchestrator.application.sequence_service import SequenceService
 from camera_orchestrator.application.session_paths import resolve_session
@@ -37,6 +37,7 @@ from camera_orchestrator.domain.ports.storage import SolveRecordRepository
 from camera_orchestrator.interfaces.api.deps import (
     SolverFactory,
     get_align_service,
+    get_browse_service,
     get_capture_service,
     get_config,
     get_registry,
@@ -49,6 +50,7 @@ from camera_orchestrator.interfaces.api.models import (
     AlignJobBody,
     BatchJobBody,
     CaptureJobBody,
+    ConfirmBody,
     Job,
     JobList,
     SequenceJobBody,
@@ -62,9 +64,37 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 CAPPED_PHASES: tuple[PhaseKind, ...] = ("dark", "bias")
 
 
-def _session_dirs(cfg: Config, out_dir: str | None, name: str | None) -> tuple[str, str | None]:
-    """Resolve (out_dir, session_dir) the same way the CLI's --out/--name do."""
-    return resolve_session(out_dir or cfg.grab.out_dir, name)
+def _confine(browse: BrowseService, path: str, field: str) -> Path:
+    """Resolve a client-supplied path inside the capture root, or 400.
+
+    Every path on these routes arrives as a free-text field over HTTP, and each
+    one is acted on: `out_dir` gets created and written into, `folder` gets
+    `solve_results.json` plus an `annotated/` subdirectory and is bind-mounted
+    into a solver container, `file` is read and gains a sidecar. Unconfined,
+    that is "write anywhere the process can write" for anyone who can reach the
+    port. They go through the same resolver the browse routes use, against the
+    same root, so there is one confinement rule in the app and not two.
+    """
+    try:
+        return browse.resolve(path)
+    except BrowsePathError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field} '{path}' is outside the capture root {browse.root}") from None
+
+
+def _session_dirs(
+    browse: BrowseService, cfg: Config, out_dir: str | None, name: str | None,
+) -> tuple[str, str | None]:
+    """Resolve (out_dir, session_dir) the same way the CLI's --out/--name do.
+
+    Confined *after* `resolve_session`, so a `name` of '../../etc' is caught too
+    — the folder it produces is the thing that gets created. The confined path is
+    what the job then uses, so the directory checked is the directory written.
+    """
+    resolved, session_dir = resolve_session(out_dir or cfg.grab.out_dir, name)
+    confined = str(_confine(browse, resolved, "out_dir"))
+    return confined, confined if session_dir is not None else None
 
 
 def _ensure_dir(path: str) -> None:
@@ -81,9 +111,10 @@ async def start_capture(
     cfg: Config = Depends(get_config),
     registry: JobRegistry = Depends(get_registry),
     capture: CaptureService = Depends(get_capture_service),
+    browse: BrowseService = Depends(get_browse_service),
 ) -> Job:
     """Fire a capture run (card-only by default, `download` opts into USB transfer)."""
-    out_dir, session_dir = _session_dirs(cfg, body.out_dir, body.name)
+    out_dir, session_dir = _session_dirs(browse, cfg, body.out_dir, body.name)
     request = body.to_request(session_dir or out_dir)
 
     def runner(ctx: JobContext) -> CaptureResult:
@@ -111,9 +142,10 @@ async def start_align(
     cfg: Config = Depends(get_config),
     registry: JobRegistry = Depends(get_registry),
     align: AlignService = Depends(get_align_service),
+    browse: BrowseService = Depends(get_browse_service),
 ) -> Job:
     """Capture one frame and plate-solve it to check where the scope is pointing."""
-    out_dir, session_dir = _session_dirs(cfg, body.out_dir, body.name)
+    out_dir, session_dir = _session_dirs(browse, cfg, body.out_dir, body.name)
     request = body.to_request(out_dir)
 
     def runner(ctx: JobContext) -> AlignResult:
@@ -135,6 +167,7 @@ async def start_sequence(
     cfg: Config = Depends(get_config),
     registry: JobRegistry = Depends(get_registry),
     sequence: SequenceService = Depends(get_sequence_service),
+    browse: BrowseService = Depends(get_browse_service),
 ) -> Job:
     """Run a lights/darks/bias sequence, pausing for a lens-cap confirmation.
 
@@ -142,7 +175,7 @@ async def start_sequence(
     forward an `on_frame` to its capture calls, so there is nothing finer to
     report (recorded in docs/20260916-web-ui-api.md).
     """
-    out_dir, session_dir = _session_dirs(cfg, body.out_dir, body.name)
+    out_dir, session_dir = _session_dirs(browse, cfg, body.out_dir, body.name)
     request = body.to_request(session_dir or out_dir)
     counts: dict[PhaseKind, int] = {
         "light": request.lights, "dark": request.darks, "bias": request.bias}
@@ -182,9 +215,10 @@ async def start_batch(
     registry: JobRegistry = Depends(get_registry),
     solver_factory: SolverFactory = Depends(get_solver_factory),
     repository: SolveRecordRepository = Depends(get_solve_repository),
+    browse: BrowseService = Depends(get_browse_service),
 ) -> Job:
     """Plate-solve every unsolved image in a folder."""
-    folder = Path(body.folder)
+    folder = _confine(browse, body.folder, "folder")
     if not folder.is_dir():
         raise HTTPException(status_code=404, detail=f"no such folder: {body.folder}")
 
@@ -216,9 +250,10 @@ async def start_solve(
     registry: JobRegistry = Depends(get_registry),
     solver_factory: SolverFactory = Depends(get_solver_factory),
     repository: SolveRecordRepository = Depends(get_solve_repository),
+    browse: BrowseService = Depends(get_browse_service),
 ) -> Job:
     """Plate-solve one image file in place, writing its sidecar alongside."""
-    path = Path(body.file)
+    path = _confine(browse, body.file, "file")
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"no such file: {body.file}")
     if repository.exists(path.name, str(path.parent)) and not body.force:
@@ -259,9 +294,22 @@ async def get_job(job_id: str, registry: JobRegistry = Depends(get_registry)) ->
 
 
 @router.post("/{job_id}/confirm", response_model=Job)
-async def confirm_job(job_id: str, registry: JobRegistry = Depends(get_registry)) -> Job:
-    """Answer a pending prompt — the UI's replacement for the CLI's Enter key."""
-    return await anyio.to_thread.run_sync(registry.confirm, job_id)
+async def confirm_job(
+    job_id: str,
+    body: ConfirmBody | None = None,
+    registry: JobRegistry = Depends(get_registry),
+) -> Job:
+    """Answer a pending prompt — the UI's replacement for the CLI's Enter key.
+
+    The body carries the `prompt.token` being answered; a confirm without it (or
+    with a superseded one) is a 409 rather than a release of whatever the job
+    happens to be waiting on next.
+
+    Called **inline**, not on a worker thread: it is a mutex acquire plus an
+    Event.set, and bridging it would put one of the two safety-critical controls
+    behind anyio's exhaustible thread limiter for no benefit.
+    """
+    return registry.confirm(job_id, body.token if body is not None else None)
 
 
 @router.post("/{job_id}/cancel", response_model=Job)
@@ -271,5 +319,8 @@ async def cancel_job(job_id: str, registry: JobRegistry = Depends(get_registry))
     Cooperative: a job waiting on a prompt unwinds at once, a running capture
     stops at its next frame boundary, and a blocking driver call has to finish
     first. The returned Job may still read 'running'.
+
+    Inline for the same reason as `confirm_job` — a user who is cancelling a
+    wedged camera must not queue behind the threads that wedged it.
     """
-    return await anyio.to_thread.run_sync(registry.cancel, job_id)
+    return registry.cancel(job_id)

@@ -181,7 +181,7 @@ export class JobsPanel {
     }
     this.prompt.show(waiting, {
       context: this.contexts.get(waiting.id),
-      onConfirm: (id) => this._confirm(id),
+      onConfirm: (id, token) => this._confirm(id, token),
       onCancel: () => this._cancel(waiting.id),
     });
   }
@@ -273,9 +273,11 @@ export class JobsPanel {
    * connection. api.js falls back to the POST route while it is reconnecting;
    * either way the resulting state arrives as a normal push. */
 
-  async _confirm(id) {
+  async _confirm(id, token) {
     try {
-      const job = await this.socket.confirm(id);
+      // The token comes from the prompt the user answered, not from our copy of
+      // the job: answering is only meaningful for the question on screen.
+      const job = await this.socket.confirm(id, token);
       if (job) this._onJob(job);
     } catch (err) {
       this.handlers.onError?.(err);

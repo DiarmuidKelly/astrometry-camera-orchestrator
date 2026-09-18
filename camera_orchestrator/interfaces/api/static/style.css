@@ -11,7 +11,12 @@
  *     preserve rod-cell sensitivity. This is the established astronomy
  *     convention and it genuinely matters here.
  *  3. NO LAYOUT SHIFT. Numeric readouts are tabular-figure monospace with
- *     reserved width, so a changing focus score does not make the page jitter.
+ *     reserved width, so a live-updating count or elapsed time does not make
+ *     the page jitter.
+ *  4. CONTRAST IS NOT NEGOTIABLE EITHER. Red-shifted does not mean dim: the
+ *     greys and the heading red are tuned to clear WCAG AA (4.5:1) against the
+ *     panel backgrounds. Keeping the hue is what protects dark adaptation;
+ *     keeping the text unreadable protects nothing.
  *
  * Self-hosted system font stack — no CDN, no webfont; this must work with no
  * internet at all.
@@ -25,12 +30,21 @@
   --line: #2b1a1d;
   --line-bright: #45262a;
 
+  /* Same red hue throughout, three steps of emphasis. The ratios below are
+     against --panel-2, the lightest surface text sits on, so every other
+     background is better still:
+       --text        10.1:1   --text-dim  6.0:1   --text-faint  4.6:1
+     --text-faint is the floor for body copy and it clears AA on its own. */
   --text: #cfb9b8;
-  --text-dim: #8a7173;
-  --text-faint: #5e4c4e;
+  --text-dim: #a88a8c;
+  --text-faint: #92767a;
 
   --accent: #ff4a2a;
+  /* Surfaces and borders (the primary button's fill). Too dark for text. */
   --accent-soft: #c23a1e;
+  /* The same red, lifted to 4.7:1 — for headings and anything else that is
+     read rather than looked at. */
+  --accent-head: #e64524;
   --accent-dim: #4a1a10;
   --amber: #ffa62b;
   --amber-dim: #4a3410;
@@ -62,7 +76,7 @@ html, body {
 
 h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 h1 { font-size: 1.05rem; }
-h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent-soft); }
+h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent-head); }
 h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); }
 h4 { font-size: 1rem; }
 p { margin: 0.2rem 0; }
@@ -169,7 +183,7 @@ kbd {
   color: #0a0405; background: var(--amber); border-color: var(--amber);
   font-weight: 700;
 }
-.badge[data-state="succeeded"] { color: var(--accent-soft); border-color: var(--accent-dim); }
+.badge[data-state="succeeded"] { color: var(--accent-head); border-color: var(--accent-dim); }
 .badge[data-state="failed"] { color: var(--danger); border-color: var(--danger); }
 
 /* Generic progress bar. */
@@ -260,16 +274,39 @@ kbd {
 
 /* ------------------------------------------------------------ live view */
 
-.viewport-shell { position: relative; }
+/* The shell is the frame's positioning context — the badges, the stream
+   overlay and the lens-cap takeover are all `inset: 0` against it — so the
+   width cap belongs HERE, not on .viewport, or the overlays would stretch past
+   the frame they are supposed to cover. */
+.viewport-shell {
+  position: relative;
+  /* Height of everything that is NOT the frame but must stay on screen with
+     it: the topbar, the prompt bar, the live controls, the legend and the page
+     padding. Measured, with a little slack. */
+  --live-chrome: 320px;
+  /* Cap the frame by the WINDOW height, not only by the column width. A 3:2 box
+     filling a 1920px-wide column is 980px tall, which pushed the prompt bar —
+     the one line that says what Enter will do — 10px below the fold on the
+     likeliest rig display. Capping the width at 1.5x the available height keeps
+     the box 3:2 and simply makes it smaller, rather than letterboxing it.
+     dvh, not vh: a phone's collapsing URL bar must not change the answer. */
+  max-inline-size: max(360px, calc((100dvh - var(--live-chrome)) * 1.5));
+  margin-inline: auto;
+}
 
 .viewport {
   position: relative;
   overflow: hidden;              /* the crop window for digital zoom */
   aspect-ratio: 3 / 2;
+  /* Belt and braces against the width cap above: never taller than the space
+     there is, never so short it is useless for judging focus. */
+  max-block-size: max(240px, calc(100dvh - var(--live-chrome)));
   background: #000;
   border-radius: 8px;
   border: 1px solid var(--line);
   touch-action: none;            /* we handle drag-to-pan ourselves */
+  user-select: none;             /* a pan must not select the page instead */
+  -webkit-user-select: none;
   cursor: default;
 }
 .panel-live[data-zoomed="true"] .viewport { cursor: grab; }
@@ -281,6 +318,13 @@ kbd {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  /* An <img> is natively draggable, and the drag gesture fired `pointercancel`
+     one move into a pan — so a 60px drag panned 6px and left a ghost image
+     trailing the cursor. The pan handlers live on .viewport, so the frame
+     itself wants no pointer events at all. */
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
   transform-origin: center center;
   /* No transition: focusing is a real-time feedback loop and easing the zoom
      would put a lag between the key press and the pixels. */
@@ -518,7 +562,7 @@ kbd {
   gap: 0.5rem;
   min-height: var(--tap);
 }
-.config-details > summary::before { content: "▸"; color: var(--accent-soft); }
+.config-details > summary::before { content: "▸"; color: var(--accent-head); }
 .config-details[open] > summary::before { content: "▾"; }
 .config-details > summary::-webkit-details-marker { display: none; }
 .config-body { margin-top: 0.6rem; }
@@ -534,7 +578,7 @@ kbd {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--accent-soft);
+  color: var(--accent-head);
 }
 .config-advanced > summary {
   cursor: pointer;
@@ -580,7 +624,7 @@ kbd {
   min-width: 6.5ch; font-size: 0.68rem; text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--text-faint);
 }
-.file-kind[data-kind="raw"] { color: var(--accent-soft); }
+.file-kind[data-kind="raw"] { color: var(--accent-head); }
 .file-kind[data-kind="preview"],
 .file-kind[data-kind="solved_sidecar"] { color: var(--amber); }
 
@@ -654,6 +698,15 @@ kbd {
   /* On a phone the legend is noise — the keyboard is not the input method. */
   .legend { display: none; }
   .btn-big { flex-basis: 100%; }
+
+  /* The frame is width-bound here, so every pixel of horizontal padding is a
+     pixel of focus detail lost. Let it bleed to both edges: 233px of frame is
+     not enough to judge a star, which is the entire job. */
+  .panel-live > .viewport-shell {
+    margin-inline: -1.2rem;
+    --live-chrome: 300px;   /* no legend down here, so less has to fit below */
+  }
+  .viewport { border-radius: 0; border-inline-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

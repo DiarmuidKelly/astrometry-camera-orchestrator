@@ -25,6 +25,10 @@ Bidirectional: `confirm` and `cancel` arrive as commands on the same socket, so
 answering the lens-cap prompt costs no extra connection either. `POST
 /api/jobs/{id}/confirm` and `/cancel` stay as the tested fallback.
 
+**The handshake is checked before it is accepted.** WebSockets are exempt from
+the same-origin policy, so a foreign page gets a working socket unless the server
+refuses one; `origin_allowed` below is the check and the reasoning.
+
 The registry is thread-based (`threading.Condition`) and this endpoint is async,
 so every registry call that can block is bridged with `anyio.to_thread.run_sync`.
 Blocking the event loop here would stall every other request, the MJPEG stream
@@ -32,7 +36,9 @@ included — the exact class of failure this module exists to remove.
 """
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
+from urllib.parse import urlsplit
 
 import anyio
 import anyio.to_thread
@@ -40,7 +46,11 @@ from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStre
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from camera_orchestrator.interfaces.api.deps import get_ws_registry
-from camera_orchestrator.interfaces.api.jobs import JobNotFoundError, JobRegistry
+from camera_orchestrator.interfaces.api.jobs import (
+    JobNotFoundError,
+    JobPromptMismatchError,
+    JobRegistry,
+)
 from camera_orchestrator.log import get_logger
 
 log = get_logger("camera_orchestrator.api.ws")
@@ -59,21 +69,100 @@ SEND_BUFFER = 64
 
 Message = dict[str, Any]
 
+# Close code 1008 ("policy violation") — the right frame for a connection that
+# was well-formed but is not allowed, as opposed to 1003 (bad data) or 1011.
+WS_POLICY_VIOLATION = 1008
 
-def _push(sink: MemoryObjectSendStream[Message], message: Message) -> None:
-    """Queue an outbound message; never block the producer.
+# Hostnames that are loopback but are not IP literals.
+_LOOPBACK_NAMES = {"localhost"}
+
+# Default port per scheme, for comparing an Origin that omitted one.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _is_loopback(hostname: str) -> bool:
+    """True for 'localhost' and any address in a loopback range (127/8, ::1)."""
+    if hostname in _LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _authority(host_header: str, scheme: str) -> tuple[str, int] | None:
+    """Split a `Host` header into (hostname, port), defaulting the port by scheme.
+
+    Parsed as the authority of a URL rather than split on ':' so an IPv6 literal
+    ('[::1]:8000') survives.
+    """
+    parsed = urlsplit(f"//{host_header}")
+    try:
+        hostname, port = parsed.hostname, parsed.port
+    except ValueError:
+        return None  # a non-numeric port: not a Host we can compare against
+    if hostname is None:
+        return None
+    return hostname, port if port is not None else _DEFAULT_PORTS[scheme]
+
+
+def origin_allowed(origin: str | None, host_header: str | None) -> bool:
+    """Whether a WebSocket handshake carrying `origin` may be accepted.
+
+    WebSockets are exempt from the same-origin policy: the browser sends the
+    handshake and hands the page a working socket regardless of where the page
+    came from. Without this check any site the user visits could read the job
+    snapshot — session paths, filenames, the target's RA/Dec — and send `cancel`
+    on a running sequence or `confirm` to skip a lens-cap prompt, ruining a
+    calibration set silently.
+
+    Three cases:
+
+    - **No Origin at all** → allowed. Browsers always send one on a WebSocket
+      handshake, so an absent header means a non-browser client (curl, a script,
+      a future native app), which is not the adversary here and has no ambient
+      authority to abuse.
+    - **A loopback origin** → allowed. Another page served from this machine is
+      already inside the trust boundary of a single-user tool.
+    - **Anything else** → must match the `Host` the request actually arrived on,
+      compared as scheme + hostname + port and not as a substring (so
+      `http://127.0.0.1.evil.example` is not 'close enough'). Matching on Host
+      rather than on a configured name is what keeps the phone working: with
+      `--host 0.0.0.0` the page is served from the LAN IP and its Origin is that
+      same LAN IP, so the two agree without anything being configured.
+    """
+    if origin is None:
+        return True
+    parsed = urlsplit(origin)
+    if parsed.scheme not in _DEFAULT_PORTS or not parsed.hostname:
+        return False  # 'null', 'file://' and other opaque origins
+    if _is_loopback(parsed.hostname):
+        return True
+    if not host_header:
+        return False
+    source = _authority(parsed.netloc, parsed.scheme)
+    target = _authority(host_header, parsed.scheme)
+    return source is not None and source == target
+
+
+def _push(sink: MemoryObjectSendStream[Message], message: Message) -> bool:
+    """Queue an outbound message; never block the producer. True if it went out.
 
     A full buffer or a half-closed connection drops the message rather than
-    stalling the watcher — the next change resends the job in full, and a
-    reconnect resyncs from the snapshot, so nothing is lost permanently.
+    stalling the watcher. The caller **must** act on a False: a drop is only
+    harmless while another update for that job is still to come, and a job's
+    terminal frame is by definition the last one. Recording a dropped job as
+    sent is what left the UI showing `running` for a job that had finished.
     """
     try:
         sink.send_nowait(message)
+        return True
     except anyio.WouldBlock:
         log.warning("Job socket send buffer full — dropping a message",
                     extra={"type": message.get("type")})
+        return False
     except anyio.BrokenResourceError:
-        pass  # the connection is already going away
+        return False  # the connection is already going away
 
 
 async def _watch(registry: JobRegistry, sink: MemoryObjectSendStream[Message]) -> None:
@@ -82,6 +171,12 @@ async def _watch(registry: JobRegistry, sink: MemoryObjectSendStream[Message]) -
     Only *changed* jobs go on the wire. The registry's revision is registry-wide,
     so each wake hands back every job; remembering the last payload per id keeps a
     30-frame capture from rebroadcasting every other job on every frame.
+
+    A drop resets the cursor. Only *delivered* payloads are remembered as sent,
+    and any drop sets `sent` back to None so the next wake — a real change or the
+    heartbeat tick, whichever comes first — re-emits the full snapshot. Without
+    that, a dropped **terminal** frame was never resent (there is no next update
+    for a finished job) and the UI showed `running` forever.
 
     `abandon_on_cancel` matters: the wait is parked in a worker thread for up to
     WS_TICK_S, and a disconnect must close the socket now rather than after the
@@ -96,8 +191,8 @@ async def _watch(registry: JobRegistry, sink: MemoryObjectSendStream[Message]) -
         payloads = {job.id: job.model_dump(mode="json") for job in jobs}
 
         if sent is None:
-            _push(sink, {"type": "snapshot", "jobs": list(payloads.values())})
-            sent = payloads
+            if _push(sink, {"type": "snapshot", "jobs": list(payloads.values())}):
+                sent = payloads
             continue
 
         changed = [job_id for job_id, job in payloads.items() if sent.get(job_id) != job]
@@ -106,9 +201,14 @@ async def _watch(registry: JobRegistry, sink: MemoryObjectSendStream[Message]) -
             # proves the socket is alive without re-sending unchanged state.
             _push(sink, {"type": "ping"})
             continue
-        for job_id in changed:
-            _push(sink, {"type": "job", "job": payloads[job_id]})
-        sent = payloads
+        delivered = {
+            job_id for job_id in changed
+            if _push(sink, {"type": "job", "job": payloads[job_id]})
+        }
+        if len(delivered) != len(changed):
+            sent = None  # something was dropped; resync wholesale on the next wake
+            continue
+        sent.update({job_id: payloads[job_id] for job_id in delivered})
 
 
 async def _receive(
@@ -148,10 +248,18 @@ async def _receive(
                          "message": "job_id is required"})
             continue
 
-        action = registry.confirm if command == "confirm" else registry.cancel
+        # Both are a mutex acquire plus an Event.set — microseconds. They run
+        # inline rather than through anyio.to_thread: the default limiter is 40
+        # threads and a wedged camera is exactly when they are all parked, so
+        # bridging these would put confirm and cancel behind the very resource
+        # the operator is trying to free.
         try:
-            job = await anyio.to_thread.run_sync(action, job_id)
-        except JobNotFoundError as exc:
+            if command == "confirm":
+                token = message.get("token")
+                job = registry.confirm(job_id, token if isinstance(token, str) else None)
+            else:
+                job = registry.cancel(job_id)
+        except (JobNotFoundError, JobPromptMismatchError) as exc:
             _push(sink, {"type": "error", "command": command, "job_id": job_id,
                          "message": str(exc)})
             continue
@@ -179,6 +287,13 @@ async def job_socket(
     registry: JobRegistry = Depends(get_ws_registry),
 ) -> None:
     """Every job update out, `confirm`/`cancel` back in, on one connection."""
+    origin = websocket.headers.get("origin")
+    if not origin_allowed(origin, websocket.headers.get("host")):
+        # Closed before accept, so the handshake never completes and the page
+        # gets a socket that errors instead of one that works.
+        log.warning("Rejected a job socket from a foreign origin", extra={"origin": origin})
+        await websocket.close(code=WS_POLICY_VIOLATION)
+        return
     await websocket.accept()
     send_stream, receive_stream = anyio.create_memory_object_stream[Message](SEND_BUFFER)
 

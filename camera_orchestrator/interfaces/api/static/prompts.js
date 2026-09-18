@@ -112,6 +112,7 @@ export class PhysicalPrompt {
   constructor(root) {
     this.root = root;
     this.jobId = null;
+    this.token = null;
     this.since = null;
     this._onConfirm = null;
     this._onCancel = null;
@@ -132,8 +133,11 @@ export class PhysicalPrompt {
   show(job, { context = null, onConfirm, onCancel } = {}) {
     this._onConfirm = onConfirm;
     this._onCancel = onCancel;
-    if (this.jobId === job.id) return; // already up; don't re-render and flicker
+    if (this.jobId === job.id && this.token === job.prompt?.token) return; // already up
     this.jobId = job.id;
+    // Echoed back on confirm. A new phase mints a new token, so a prompt left on
+    // screen from the previous phase cannot answer this one.
+    this.token = job.prompt?.token ?? null;
     this.since = Date.now();
 
     const { mode, phase } = classifyPrompt(job.prompt);
@@ -190,6 +194,7 @@ export class PhysicalPrompt {
 
   hide() {
     this.jobId = null;
+    this.token = null;
     this.since = null;
     this.root.hidden = true;
     this.root.replaceChildren();
@@ -200,8 +205,9 @@ export class PhysicalPrompt {
     if (!this.isOpen) return false;
     const confirm = this._onConfirm;
     const id = this.jobId;
+    const token = this.token;
     this.hide();
-    confirm?.(id);
+    confirm?.(id, token);
     return true;
   }
 

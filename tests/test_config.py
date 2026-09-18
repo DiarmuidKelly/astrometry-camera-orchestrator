@@ -58,13 +58,13 @@ def test_full_yaml(tmp_path):
         "solver:\n  mode: fast\n  cpulimit: 30\n"
         "optics:\n  focal_mm: 200\n  sensor_width_mm: 22.3\n"
         "search:\n  ra_deg: 277.5\n  dec_deg: -6.5\n  radius_deg: 30.0\n"
-        "location:\n  lat: 47.45\n  lon: 10.43\n"
+        "location:\n  lat: 51.4779\n  lon: -0.0015\n"
     )
     cfg = Config.load(str(yaml_file))
     assert cfg.solver.mode == "fast"
     assert cfg.optics.focal_mm == 200.0
     assert cfg.search.ra_deg == 277.5
-    assert cfg.location.lat == 47.45
+    assert cfg.location.lat == 51.4779
 
 
 def test_save_round_trips_through_load(tmp_path):

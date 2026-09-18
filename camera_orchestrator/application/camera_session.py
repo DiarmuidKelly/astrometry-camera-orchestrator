@@ -41,9 +41,15 @@ CameraFactory = Callable[[], Camera]
 # How soon to re-check when a release lands while the camera is busy.
 _RETRY_DELAY_S = 2.0
 
-# Give up re-checking after this many attempts — a borrow that never ends means
-# the connection is wanted; the next stream teardown will ask again.
+# Stop re-checking at this cadence after this many attempts — a borrow that long
+# means the connection is genuinely wanted.
 _MAX_RETRIES = 5
+
+# Where the idle check goes after the retry cap. It must not simply stop: giving
+# up left the camera open indefinitely (mirror up, sensor powered) whenever a
+# borrow outlasted five retries, which a sequence does routinely. Back off to a
+# lazy poll instead, so the body is still released once the run ends.
+_BACKOFF_DELAY_S = 120.0
 
 
 class CameraSession:
@@ -69,9 +75,24 @@ class CameraSession:
         # Reentrant: a service may acquire while already holding the session on
         # the same thread (nested composition) without deadlocking.
         self._lock = threading.RLock()
+        # The idle-close scheduler's own mutex, deliberately NOT the camera lock.
+        # Two of the three call sites that arm a timer are the paths taken when
+        # the camera lock could not be acquired, so guarding the schedule with
+        # that lock is impossible — which is how timers used to be started and
+        # then lost, leaving an uncancellable close to tear down a camera an
+        # active borrow had already reclaimed. Reentrant because _close_if_idle
+        # re-arms from inside the guarded section.
+        self._sched = threading.RLock()
         # Pending debounced close (see release_when_idle).
         self._idle_timer: threading.Timer | None = None
         self._retries = 0
+        # Bumped on every (re)schedule and every cancel. A timer whose generation
+        # is stale fires into a no-op, so a leaked one cannot close the camera.
+        self._generation = 0
+        # Single-flight reconnect: the Event a concurrent caller waits on rather
+        # than tearing a freshly built session back down behind the first one.
+        self._reconnect_lock = threading.Lock()
+        self._reconnect_done: threading.Event | None = None
 
     # -- state -------------------------------------------------------------
 
@@ -149,22 +170,64 @@ class CameraSession:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def reconnect(self) -> None:
+    def reconnect(self, timeout: float | None = None) -> None:
         """Tear down the connection and build a fresh one.
 
         Not a nicety: libgphoto2 caches the in-session directory listing, so
         card writes become visible only in a new session (see
         CaptureService._await_new_card_files). A reconnect is the only way to
         re-read the card.
+
+        **Bounded, and single-flight.** A capture holds the lock for a whole
+        phase, so an untimed reconnect parks its caller for minutes. From the API
+        that caller is a worker thread out of anyio's 40-slot pool, and a user
+        clicking "reconnect" at a camera that *looks* wedged is precisely the one
+        who then needs confirm and cancel to work — so the wait is bounded and
+        expiry surfaces as CameraBusyError (503, retryable). Concurrent callers
+        coalesce onto the first attempt instead of queueing another teardown
+        behind a connection that has just been rebuilt.
+
+        Args:
+            timeout: Seconds to wait for the camera lock (and for an in-flight
+                reconnect). None waits forever — what the CLI wants.
+
+        Raises:
+            CameraBusyError: The timeout elapsed with the camera still held.
         """
-        with self._lock:
-            self._shutdown()
-            self._open()
+        with self._reconnect_lock:
+            inflight = self._reconnect_done
+            if inflight is None:
+                self._reconnect_done = done = threading.Event()
+
+        if inflight is not None:
+            if not inflight.wait(timeout):
+                raise CameraBusyError(
+                    f"camera busy — a reconnect already in flight did not finish "
+                    f"within {timeout}s"
+                )
+            return  # somebody else just rebuilt the connection; that is the answer
+
+        try:
+            if not self._lock.acquire(timeout=-1 if timeout is None else timeout):
+                raise CameraBusyError(
+                    f"camera busy — could not reconnect within {timeout}s "
+                    f"(capture in progress?)"
+                )
+            try:
+                self._shutdown()
+                self._open()
+            finally:
+                self._lock.release()
+        finally:
+            with self._reconnect_lock:
+                self._reconnect_done = None
+            done.set()
+
 
     def close(self) -> None:
         """Close the underlying camera and release the session's claim."""
+        self._cancel_idle_close()
         with self._lock:
-            self._cancel_idle_close()
             self._shutdown()
 
     def release_when_idle(self, delay: float = 15.0) -> None:
@@ -198,47 +261,72 @@ class CameraSession:
             self._lock.release()
 
     def _arm_idle_timer(self, delay: float) -> None:
-        """(Re)schedule a close attempt. Safe with or without the lock held."""
-        if self._idle_timer is not None:
-            self._idle_timer.cancel()
-        timer = threading.Timer(delay, self._close_if_idle)
-        timer.daemon = True
-        self._idle_timer = timer
-        timer.start()
+        """(Re)schedule a close attempt. Guarded by the scheduler mutex only.
 
-    def _close_if_idle(self) -> None:
+        Every armed timer carries the generation it was armed under. Cancelling a
+        Timer is not reliable on its own — it loses to a callback that has already
+        started — so the generation is what actually makes a superseded close a
+        no-op.
+        """
+        with self._sched:
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+            self._generation += 1
+            timer = threading.Timer(delay, self._close_if_idle, args=(self._generation,))
+            timer.daemon = True
+            self._idle_timer = timer
+            timer.start()
+
+    def _close_if_idle(self, generation: int) -> None:
         """Timer callback: close only if nobody is holding the camera.
 
-        Retries are capped. A borrow that never ends (a long sequence, or a leak)
-        would otherwise re-arm the timer forever; the connection is wanted in
-        that case anyway, and the next stream teardown asks again.
+        `generation` is the schedule this timer belongs to. Anything older has
+        been superseded or cancelled — a borrow has since reclaimed the camera —
+        so it must do nothing at all. A stale timer that went ahead and tore the
+        connection down is what killed live view a few seconds after a Stop→Start,
+        and with two tabs open.
+
+        Retries at the fast cadence are capped, but hitting the cap re-arms at a
+        long backoff rather than giving up: a borrow that outlives five retries
+        (any real sequence) would otherwise leave the body awake all night.
         """
-        if self._retries >= _MAX_RETRIES:
-            self._retries = 0
-            return
-        if not self._lock.acquire(blocking=False):
-            self._retries += 1
-            self._arm_idle_timer(_RETRY_DELAY_S)   # still busy; come back later
-            return
-        try:
+        with self._sched:
+            if generation != self._generation:
+                return                              # superseded; not ours to close
             self._idle_timer = None
-            if self._depth > 0:
-                self._retries += 1
-                self._arm_idle_timer(_RETRY_DELAY_S)
+            if self._retries >= _MAX_RETRIES:
+                self._retries = 0
+                self._arm_idle_timer(_BACKOFF_DELAY_S)
                 return
-            self._retries = 0
-            if self._camera is not None:
-                log.info("Releasing idle camera", extra={"reason": "no borrowers"})
-                self._shutdown()
-        finally:
-            self._lock.release()
+            if not self._lock.acquire(blocking=False):
+                self._retries += 1
+                self._arm_idle_timer(_RETRY_DELAY_S)   # still busy; come back later
+                return
+            try:
+                if self._depth > 0:
+                    self._retries += 1
+                    self._arm_idle_timer(_RETRY_DELAY_S)
+                    return
+                self._retries = 0
+                if self._camera is not None:
+                    log.info("Releasing idle camera", extra={"reason": "no borrowers"})
+                    self._shutdown()
+            finally:
+                self._lock.release()
 
     def _cancel_idle_close(self) -> None:
-        """Drop a pending idle close. Lock must be held."""
-        self._retries = 0
-        if self._idle_timer is not None:
-            self._idle_timer.cancel()
-            self._idle_timer = None
+        """Drop a pending idle close. Takes the scheduler mutex itself.
+
+        Deliberately independent of the camera lock, so it is callable from the
+        lock-less paths in release_when_idle as well as from under the lock in
+        _open().
+        """
+        with self._sched:
+            self._generation += 1       # void anything already armed or running
+            self._retries = 0
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
 
     def __enter__(self) -> "CameraSession":
         return self
@@ -281,6 +369,7 @@ class _CameraProxy(Camera):
 
     def close(self) -> None:
         """No-op — the session owns the connection, not the borrower."""
+
 
     def __enter__(self) -> "Camera":
         self._session._lock.acquire()

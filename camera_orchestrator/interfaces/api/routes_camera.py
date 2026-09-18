@@ -48,6 +48,10 @@ SINGLE_PREVIEW_TIMEOUT_S = 2.0
 # UI's status poll never hangs.
 STATUS_TIMEOUT_S = 2.0
 
+# How long a reconnect waits for the camera lock before giving up with a 503.
+# Generous enough to ride out a frame in flight, far short of a whole phase.
+RECONNECT_TIMEOUT_S = 5.0
+
 MJPEG_BOUNDARY = "frame"
 
 _NO_STORE = {"Cache-Control": "no-store, no-cache, must-revalidate"}
@@ -211,6 +215,13 @@ async def reconnect(
     The escape hatch for the two states the hardware gets into: a stale session
     after the body auto-powered off, and a cached directory listing that will not
     show new card files.
+
+    Bounded, and a 503 on expiry. Untimed, this parked a worker thread for as
+    long as a capture held the session — and with `abandon_on_cancel=False` that
+    thread could not be reclaimed even when the client gave up. A few impatient
+    clicks drained anyio's 40-thread pool, and `confirm` and `cancel` (also
+    bridged then) stopped working: the operator lost the only two controls that
+    would have released the lock.
     """
-    await anyio.to_thread.run_sync(session.reconnect)
+    await anyio.to_thread.run_sync(session.reconnect, RECONNECT_TIMEOUT_S)
     return OkResponse(ok=True)

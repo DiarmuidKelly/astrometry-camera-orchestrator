@@ -42,7 +42,7 @@ def test_solve_record_serialises_to_json():
             height_px=4000,
         ),
         hints_used=SolveHints(ra_deg=277.5, dec_deg=-6.5, radius_deg=60.0),
-        observer=ObserverInfo(lat=47.45, lon=10.43),
+        observer=ObserverInfo(lat=51.4779, lon=-0.0015),
         solver_mode="accurate",
     )
     data = json.loads(record.model_dump_json())
@@ -50,7 +50,7 @@ def test_solve_record_serialises_to_json():
     assert data["solved"] is True
     assert data["solve"]["center_ra_deg"] == 267.73
     assert data["exif"]["focal_mm"] == 200.0
-    assert data["observer"]["lat"] == 47.45
+    assert data["observer"]["lat"] == 51.4779
 
 
 def test_solve_record_unsolved():

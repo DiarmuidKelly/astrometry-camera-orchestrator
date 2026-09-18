@@ -11,10 +11,14 @@ which polls the job endpoint rather than sleeping a fixed amount.
 """
 from __future__ import annotations
 
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from camera_orchestrator.application.capture_service import CaptureService
 from camera_orchestrator.application.sequence_service import SequenceService
@@ -36,6 +40,13 @@ from tests.test_service import MockCamera  # reuse the atomic-ABC mock
 # Polling budget for a job to reach a state. Generous: these run on worker
 # threads and CI is slower than a laptop.
 STATE_TIMEOUT_S = 10.0
+
+# The capture root these tests run under. `out_dir`, `folder` and `file` are
+# confined to the root fixed at app creation, and every test here works in its
+# own `tmp_path` — which lives under the system temp directory, so pointing the
+# root at that keeps one helper honest for all of them. Resolved because
+# tmp_path is resolved too, and the comparison is path-equality.
+TEST_ROOT = str(Path(tempfile.gettempdir()).resolve())
 
 # Overridable dependencies, by the keyword _client() accepts for each.
 _DEPS = {
@@ -77,9 +88,10 @@ def _const(value):
     return provide
 
 
-def _client(cfg: Config | None = None, confirm_timeout: float = 5.0, **overrides) -> TestClient:
+def _client(cfg: Config | None = None, confirm_timeout: float = 5.0,
+            browse_root: str = TEST_ROOT, **overrides) -> TestClient:
     """App + TestClient with the named dependencies overridden."""
-    app = create_app(cfg or Config(), confirm_timeout=confirm_timeout)
+    app = create_app(cfg or Config(), confirm_timeout=confirm_timeout, browse_root=browse_root)
     for dependency, value in overrides.items():
         app.dependency_overrides[_DEPS[dependency]] = _const(value)
     return TestClient(app)
@@ -211,21 +223,100 @@ def _sequence_client(camera: MockCamera, **kw) -> TestClient:
     return _client(get_sequence_service=service, **kw)
 
 
+def _confirm(client: TestClient, job: dict):
+    """Answer a job's pending prompt, quoting the token it is showing."""
+    return client.post(f"/api/jobs/{job['id']}/confirm",
+                       json={"token": job["prompt"]["token"]})
+
+
 def test_sequence_job_waits_for_a_lens_cap_confirmation(tmp_path):
     client = _sequence_client(MockCamera())
     posted = client.post("/api/jobs/sequence", json={"out_dir": str(tmp_path), "darks": 1})
 
     job = _await_state(client, posted.json()["id"], "awaiting_confirmation")
-    assert job["prompt"] == {"kind": "dark",
-                             "message": "Cover the lens for dark frames, then confirm."}
+    assert job["prompt"]["kind"] == "dark"
+    assert job["prompt"]["message"] == "Cover the lens for dark frames, then confirm."
+    assert job["prompt"]["token"]                       # scopes the answer to this prompt
 
-    confirmed = client.post(f"/api/jobs/{job['id']}/confirm")
+    confirmed = _confirm(client, job)
     assert confirmed.status_code == 200
 
     done = _await_state(client, job["id"], "succeeded")
     assert done["prompt"] is None                       # cleared on confirm
     assert [p["kind"] for p in done["result"]["phases"]] == ["dark"]
     assert done["progress"] == {"current": 1, "total": 1, "label": "complete"}
+
+
+def test_a_confirm_while_running_does_not_answer_the_next_phases_prompt(tmp_path):
+    """The silent-data-corruption bug: one stale confirm, an uncapped bias phase.
+
+    A confirm that lands while the job is `running` (a double-click, an impatient
+    second press, a command replayed after a socket reconnect) used to leave the
+    Event set, so the *next* ctx.prompt() returned immediately — the bias frames
+    were shot with the lens off and the manifest recorded them as calibration.
+    """
+    camera = BlockingCamera()
+    client = _sequence_client(camera)
+    posted = client.post(
+        "/api/jobs/sequence", json={"out_dir": str(tmp_path), "darks": 1, "bias": 1})
+    job_id = posted.json()["id"]
+
+    dark = _await_state(client, job_id, "awaiting_confirmation")
+    assert dark["prompt"]["kind"] == "dark"
+    assert _confirm(client, dark).status_code == 200
+
+    # The dark phase is now on the wire, with the shutter held open by the fake.
+    assert camera.firing.wait(STATE_TIMEOUT_S)
+    assert client.get(f"/api/jobs/{job_id}").json()["state"] == "running"
+    client.post(f"/api/jobs/{job_id}/confirm")                       # the stale press
+    client.post(f"/api/jobs/{job_id}/confirm", json={"token": dark["prompt"]["token"]})
+    camera.released.set()
+
+    # The bias phase must still stop and ask. Before the fix it ran straight on.
+    bias = _await_state(client, job_id, "awaiting_confirmation", "succeeded", "failed")
+    assert bias["state"] == "awaiting_confirmation"
+    assert bias["prompt"]["kind"] == "bias"
+    assert bias["prompt"]["token"] != dark["prompt"]["token"]        # a fresh question
+
+    assert _confirm(client, bias).status_code == 200
+    assert _await_state(client, job_id, "succeeded")["prompt"] is None
+
+
+def test_a_confirm_without_a_token_is_refused(tmp_path):
+    # Absent is treated exactly like wrong: the live prompt must be answered
+    # deliberately, by whoever can see it.
+    client = _sequence_client(MockCamera())
+    posted = client.post("/api/jobs/sequence", json={"out_dir": str(tmp_path), "darks": 1})
+    job = _await_state(client, posted.json()["id"], "awaiting_confirmation")
+
+    refused = client.post(f"/api/jobs/{job['id']}/confirm")
+    assert refused.status_code == 409
+    assert "token" in refused.json()["detail"]
+    # Still blocked, still asking — nothing was released by the bad attempt.
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "awaiting_confirmation"
+    assert _confirm(client, job).status_code == 200
+
+
+def test_a_confirm_quoting_a_superseded_token_is_refused(tmp_path):
+    client = _sequence_client(MockCamera())
+    posted = client.post("/api/jobs/sequence", json={"out_dir": str(tmp_path), "darks": 1})
+    job = _await_state(client, posted.json()["id"], "awaiting_confirmation")
+
+    stale = client.post(f"/api/jobs/{job['id']}/confirm", json={"token": "from-last-phase"})
+    assert stale.status_code == 409
+    assert _confirm(client, job).status_code == 200                 # the real one works
+
+
+def test_a_confirm_for_a_job_that_is_not_waiting_is_a_no_op(tmp_path):
+    # Idempotent rather than an error: a second press on a prompt that has
+    # already been answered is a normal thing for a person to do in the dark.
+    client = _capture_client(MockCamera())
+    job_id = client.post("/api/jobs/capture", json={"out_dir": str(tmp_path)}).json()["id"]
+    _await_state(client, job_id, "succeeded")
+
+    answered = client.post(f"/api/jobs/{job_id}/confirm", json={"token": "anything"})
+    assert answered.status_code == 200
+    assert answered.json()["state"] == "succeeded"
 
 
 def test_job_result_datetimes_survive_json_encoding(tmp_path):
@@ -298,8 +389,10 @@ def test_solve_job_solves_and_saves_a_record(tmp_path):
     assert (str(tmp_path), "IMG_0001.JPG") in repo.store   # sidecar persisted
 
 
-def test_solve_job_missing_file_is_404():
-    response = _client().post("/api/jobs/solve", json={"file": "/nowhere/x.jpg"})
+def test_solve_job_missing_file_is_404(tmp_path):
+    # Inside the capture root but absent — a 404, distinct from the 400 an
+    # out-of-root path gets.
+    response = _client().post("/api/jobs/solve", json={"file": str(tmp_path / "x.jpg")})
     assert response.status_code == 404
 
 
@@ -314,8 +407,9 @@ def test_solve_job_refuses_an_existing_sidecar_without_force(tmp_path):
     assert "already has a sidecar" in response.json()["detail"]
 
 
-def test_batch_job_missing_folder_is_404():
-    assert _client().post("/api/jobs/batch", json={"folder": "/nowhere"}).status_code == 404
+def test_batch_job_missing_folder_is_404(tmp_path):
+    missing = str(tmp_path / "nope")
+    assert _client().post("/api/jobs/batch", json={"folder": missing}).status_code == 404
 
 
 def test_utc_timestamps_are_timezone_aware(tmp_path):
@@ -326,3 +420,39 @@ def test_utc_timestamps_are_timezone_aware(tmp_path):
     # The UI does date maths on these; a naive timestamp would silently be read
     # as local time.
     assert datetime.fromisoformat(job["ended_at"]).tzinfo is timezone.utc
+
+
+# The exact bodies static/capture.js builds, after omitEmpty(). Kept verbatim so
+# a server-side default that stops accepting the client's shape fails here rather
+# than at the telescope — mock.js does not validate bodies, so nothing else
+# exercises the real contract.
+_UI_CAPTURE_BODY = {
+    "iso": "3200", "shutter": "2", "count": 32, "kind": "light", "download": False,
+}
+_UI_SEQUENCE_BODY = {
+    "iso": "3200", "shutter": "2", "lights": 32, "darks": 12, "bias": 20,
+    "download": False,
+}
+_UI_ALIGN_BODY = {"iso": "3200", "shutter": "2", "force": False}
+
+
+@pytest.mark.parametrize("path,body", [
+    ("/api/jobs/capture", _UI_CAPTURE_BODY),
+    ("/api/jobs/sequence", _UI_SEQUENCE_BODY),
+    ("/api/jobs/align", _UI_ALIGN_BODY),
+])
+def test_the_front_ends_own_payload_is_accepted(path, body):
+    # Regression: capture.js sent select:null, which the server rejects because
+    # `select` has a non-null default — every capture from the UI was a 422.
+    client = _client()
+    assert client.post(path, json=body).status_code != 422, (
+        f"{path} rejected the body the front end actually sends"
+    )
+
+
+def test_a_non_optional_field_still_rejects_null():
+    # The other half of the same bug: omitting is fine, null is not, and that
+    # distinction is what the client helper exists to respect.
+    client = _client()
+    body = dict(_UI_CAPTURE_BODY, select=None)
+    assert client.post("/api/jobs/capture", json=body).status_code == 422

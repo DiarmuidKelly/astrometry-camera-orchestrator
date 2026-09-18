@@ -81,6 +81,13 @@ class DockerSolver(Solver):
                 "docker", "run", "--rm",
                 "-v", f"{self.index_dir}:/usr/local/astrometry/data:ro",
                 "-v", f"{work}:/data",
+                # Stop docker parsing options here. The image name is config
+                # (`solver.image`, writable over the API) and lands where docker
+                # is still reading flags, so without the terminator a value like
+                # '--privileged' or '-v /:/host' would be honoured as one. The
+                # value is also validated on SolverConfig; this is the belt to
+                # that braces, for any caller constructing the solver directly.
+                "--",
                 self.image,
                 "solve-field", input_arg,
                 "--dir", "/data",

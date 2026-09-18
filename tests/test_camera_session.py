@@ -14,10 +14,13 @@ import pytest
 
 from camera_orchestrator.application.camera_session import CameraSession
 from camera_orchestrator.application.capture_service import CaptureService
-from camera_orchestrator.domain.errors import CameraError
+from camera_orchestrator.domain.errors import CameraBusyError, CameraError
 from camera_orchestrator.domain.models.camera import CameraFile, CaptureRequest
 
 from tests.test_service import MockCamera  # reuse the atomic-ABC mock
+
+# How long a helper thread is given before a test calls it wedged.
+STATE_TIMEOUT_S = 10.0
 
 
 class TrackingCamera(MockCamera):
@@ -32,14 +35,21 @@ class TrackingCamera(MockCamera):
 
 
 class _Factory:
-    """Counting camera factory — one fresh TrackingCamera per call."""
+    """Counting camera factory — one fresh TrackingCamera per call.
 
-    def __init__(self, produces=None):
+    `delay` models how long a real USB claim takes, which is what gives
+    concurrent callers a window to pile up in.
+    """
+
+    def __init__(self, produces=None, delay: float = 0.0):
         self.calls = 0
         self.built: list[TrackingCamera] = []
         self._produces = produces
+        self._delay = delay
 
     def __call__(self) -> TrackingCamera:
+        if self._delay:
+            time.sleep(self._delay)
         self.calls += 1
         cam = TrackingCamera(produces=self._produces)
         self.built.append(cam)
@@ -151,6 +161,73 @@ def test_preview_helper_grabs_one_frame_per_call():
 # -- reconnect / close ----------------------------------------------------
 
 
+def _fire(timer: threading.Timer) -> None:
+    """Run a Timer's callback by hand, as the timer thread would have done.
+
+    Lets a test play the part of a leaked timer: one that was started, lost its
+    reference, and therefore could not be cancelled.
+    """
+    timer.function(*timer.args)
+
+
+def test_an_orphaned_idle_timer_cannot_close_a_reclaimed_camera():
+    """The live-view-dies-after-a-restart bug.
+
+    _arm_idle_timer used to be called from two lock-less paths, so a started
+    timer could be overwritten and become unreferenced — _cancel_idle_close then
+    had nothing to cancel, and the orphan later tore down a camera that a new
+    borrow had already reclaimed. The generation counter makes a superseded timer
+    a no-op instead.
+    """
+    session, factory = _session()
+    with session.acquire():
+        pass
+    session.release_when_idle(60.0)
+    orphan = session._idle_timer                   # pretend this reference was lost
+    assert orphan is not None
+
+    session._cancel_idle_close()                   # a borrow reclaims the camera
+    _fire(orphan)                                  # the orphan fires anyway
+
+    assert factory.built[0].closes == 0            # live view would have died here
+    assert session.is_open is True
+
+
+def test_hitting_the_retry_cap_re_arms_at_a_long_backoff():
+    # Giving up at the cap left the body awake all night whenever a borrow
+    # outlasted five retries — which any real sequence does.
+    session, _ = _session()
+    with session.acquire():
+        pass
+    session.release_when_idle(60.0)
+    timer = session._idle_timer
+    assert timer is not None
+    session._retries = 5                           # five fast retries already spent
+
+    _fire(timer)
+
+    assert session._idle_timer is not None         # still scheduled, not abandoned
+    assert session._idle_timer.interval >= 60.0    # but lazily, not every 2s
+    assert session._retries == 0
+    session._cancel_idle_close()
+
+
+def test_an_idle_close_still_fires_after_the_borrow_ends():
+    # The whole point of the scheduler: the connection is released once nothing
+    # holds it, however long that takes.
+    session, factory = _session()
+    with session.acquire():
+        pass
+    session.release_when_idle(0.01)
+    # Poll the close itself, not is_open: _shutdown drops its reference to the
+    # camera before calling close() on it, so is_open goes false a hair early.
+    deadline = time.monotonic() + 5.0
+    while factory.built[0].closes == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert factory.built[0].closes == 1
+    assert session.is_open is False
+
+
 def test_reconnect_builds_a_fresh_camera():
     session, factory = _session()
     with session.acquire():
@@ -170,6 +247,58 @@ def test_reconnected_camera_is_the_one_borrowers_see():
         camera.trigger()
     assert factory.built[1].triggers == 1       # proxy follows the swap transparently
     assert factory.built[0].triggers == 0
+
+
+def test_reconnect_gives_up_rather_than_parking_forever():
+    """A bounded reconnect is what keeps confirm and cancel reachable.
+
+    The route bridges this to a worker thread out of anyio's 40-slot pool with
+    `abandon_on_cancel=False`. Untimed, a reconnect during a long phase parks
+    that thread for the whole phase and cannot be reclaimed — a few clicks on a
+    camera that *looks* wedged drained the pool, and the operator lost the two
+    controls that would have released the lock.
+    """
+    session, _ = _session()
+    holding = threading.Event()
+    done = threading.Event()
+
+    def borrower() -> None:
+        with session.acquire():
+            holding.set()
+            done.wait(STATE_TIMEOUT_S)
+
+    thread = threading.Thread(target=borrower, daemon=True)
+    thread.start()
+    try:
+        assert holding.wait(2.0)
+        started = time.monotonic()
+        with pytest.raises(CameraBusyError, match="could not reconnect"):
+            session.reconnect(timeout=0.1)
+        assert time.monotonic() - started < 2.0     # bounded, not "until the phase ends"
+    finally:
+        done.set()
+        thread.join(timeout=2)
+
+
+def test_concurrent_reconnects_coalesce_into_one():
+    # Two impatient clicks must not mean two teardowns — the second would tear
+    # down the connection the first had just rebuilt.
+    # A slow open is what gives the later callers something to coalesce onto —
+    # a real USB claim takes far longer than this.
+    factory = _Factory(delay=0.5)
+    session = CameraSession(camera_factory=factory)
+    with session.acquire():
+        pass
+    assert factory.calls == 1
+
+    threads = [threading.Thread(target=session.reconnect, args=(5.0,)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert factory.calls == 2                       # one rebuild, shared by all four
+    assert session.is_open is True
 
 
 def test_close_releases_the_claim_and_reopens_on_next_use():

@@ -2,14 +2,26 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from io import StringIO
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from ruamel.yaml import YAML
+
+# A docker registry reference: [host[:port]/]name[:tag][@digest]. Deliberately
+# narrow — it has to start with an alphanumeric, which is what stops the value
+# being read by `docker run` as an option rather than an image.
+_IMAGE_REFERENCE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*"          # registry host or the first path element
+    r"(:[0-9]+)?"                            # optional registry port
+    r"(/[A-Za-z0-9._-]+)*"                   # optional repository path
+    r"(:[A-Za-z0-9._-]+)?"                   # optional tag
+    r"(@sha256:[a-f0-9]{64})?$"              # optional digest
+)
 
 
 def _merge_into(doc: Any, values: dict) -> None:
@@ -33,6 +45,26 @@ class SolverConfig(BaseModel):
     index_dir: str = Field(default="", description="Path to the directory containing astrometry index files.")
     cpulimit: int = Field(default=60, description="CPU time limit in seconds per solve attempt.")
     mode: Literal["fast", "accurate"] = Field(default="accurate", description="Solver mode: 'fast' downsamples more aggressively; 'accurate' is slower but more reliable.")
+
+    @field_validator("image")
+    @classmethod
+    def _validate_image(cls, value: str) -> str:
+        """Reject anything that is not a plain registry reference.
+
+        `DockerSolver` interpolates this into a `docker run` argv at a position
+        where docker is still parsing options, so a value like '--privileged',
+        '--entrypoint' or '-v /:/host' is a docker flag, not an image — and the
+        docker group is root-equivalent. The argv also terminates its options
+        with '--', but the check belongs here rather than in the adapter: this
+        runs at config load *and* on `PUT /api/config`, so a bad value is
+        refused at the boundary and never reaches disk, whichever solver
+        adapter later reads it.
+        """
+        if not _IMAGE_REFERENCE.match(value):
+            raise ValueError(
+                f"'{value}' is not a valid docker image reference "
+                "(expected [registry[:port]/]name[:tag][@sha256:...])")
+        return value
 
     @property
     def solve_args(self) -> list[str]:

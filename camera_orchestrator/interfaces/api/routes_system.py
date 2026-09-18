@@ -69,8 +69,14 @@ async def write_config(request: Request, body: Config) -> ConfigUpdateResponse:
 
     Adoption is just swapping `app.state.config`: every route resolves the config
     per request through `get_config`, and the services that capture it
-    (`build_shared_align_service`, `build_browse_service`) are rebuilt per request
-    too — so the next Align uses the RA/Dec hint you just typed.
+    (`build_shared_align_service`) are rebuilt per request too — so the next
+    Align uses the RA/Dec hint you just typed.
+
+    **One field is read here and then ignored:** `grab.out_dir`. It still moves
+    where new captures default to, but the capture root that browse and the job
+    routes are confined to was fixed when the app was created. A request that
+    could move its own confinement root confines nothing — setting it to `/` and
+    reading back through `GET /api/files/raw` was a whole-filesystem read.
     """
     path = await anyio.to_thread.run_sync(body.save, request.app.state.config_path)
     request.app.state.config = body

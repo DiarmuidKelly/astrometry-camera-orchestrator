@@ -96,6 +96,7 @@ export class LiveView {
     this._reopenTimer = null;
     this._reopenTries = 0;
     this._pollTimer = null;
+    this._frameShape = null;   // "WxH" of the last decoded frame
 
     this._bindControls();
     this._bindPan();
@@ -107,6 +108,11 @@ export class LiveView {
 
   start() {
     this.running = true;
+    // An explicit start (the button, or Retry stream) buys a fresh set of
+    // reopen attempts. Without this a stream that had already given up stayed
+    // given-up: Retry made exactly one request and fell straight back to
+    // "No live view".
+    this._reopenTries = 0;
     this._setState("connecting");
     this._lastFrameAt = performance.now();
     this._loadSource();
@@ -187,12 +193,28 @@ export class LiveView {
         }, REOPEN_DELAY_MS);
         return;
       }
+      // Giving up has to stop the traffic too. The poll timer used to survive
+      // this branch, so a dead backend was asked for frame.jpg at 2 Hz for the
+      // rest of the session — each request opening a camera session server-side
+      // — while the UI calmly read "No live view". Retry restarts them.
+      clearInterval(this._pollTimer);
+      clearTimeout(this._reopenTimer);
+      this._pollTimer = null;
+      this._reopenTimer = null;
       this._setState("error");
     });
     this.img.addEventListener("load", () => {
       if (!this.running) return;
       this._reopenTries = 0;                   // a frame arrived; start over
       this._lastFrameAt = performance.now();   // the one trustworthy signal
+      // The frame's aspect ratio decides the letterboxing, and so the pan/zoom
+      // geometry. Re-apply only when it actually changes — this fires per frame
+      // in poll mode.
+      const shape = `${this.img.naturalWidth}x${this.img.naturalHeight}`;
+      if (shape !== this._frameShape) {
+        this._frameShape = shape;
+        this._applyTransform();
+      }
       if (this.state !== "live") this._setState("live");
     });
   }
@@ -267,17 +289,37 @@ export class LiveView {
 
 
   /**
+   * The size of the *rendered image* inside the viewport, in CSS pixels.
+   *
+   * `object-fit: contain` letterboxes any stream whose aspect ratio is not the
+   * viewport's, so the <img> element box and the pixels the user can actually
+   * see are two different rectangles. Measuring the element box treats the
+   * black bars as frame, which puts click-to-focus and drag-to-pan off target
+   * on a 4:3 body. Both boxes share a centre, so only the size differs.
+   */
+  _contentBox() {
+    const w = this.img.clientWidth || this.viewport.clientWidth || 1;
+    const h = this.img.clientHeight || this.viewport.clientHeight || 1;
+    const nw = this.img.naturalWidth;
+    const nh = this.img.naturalHeight;
+    if (!nw || !nh) return { w, h };   // no frame decoded yet
+    const fit = Math.min(w / nw, h / nh);
+    return { w: nw * fit, h: nh * fit };
+  }
+
+  /**
    * Normalised frame coords (0..1) under a pointer event.
-   * The <img> fills the viewport, so viewport-relative position maps straight
-   * onto the *visible* crop, which then maps back into the full frame.
+   * Position relative to the *rendered image* maps straight onto the visible
+   * crop, which then maps back into the full frame.
    */
   pointToFrame(event) {
     const rect = this.viewport.getBoundingClientRect();
-    const fx = (event.clientX - rect.left) / (rect.width || 1);
-    const fy = (event.clientY - rect.top) / (rect.height || 1);
+    const { w, h } = this._contentBox();
+    const fx = (event.clientX - rect.left - rect.width / 2) / (w || 1);
+    const fy = (event.clientY - rect.top - rect.height / 2) / (h || 1);
     return {
-      x: this.centre.x + (fx - 0.5) * this.crop,
-      y: this.centre.y + (fy - 0.5) * this.crop,
+      x: this.centre.x + fx * this.crop,
+      y: this.centre.y + fy * this.crop,
     };
   }
 
@@ -291,14 +333,20 @@ export class LiveView {
 
   setZoomIndex(index, anchor = null) {
     const clamped = Math.max(0, Math.min(CROP_STEPS.length - 1, index));
-    if (clamped === this.cropIndex) return;
     // Zooming about a given frame point rather than the middle: stars worth
     // checking focus on are often at the edge, and centre-anchored zoom means
     // zooming in then hunting for them by drag.
+    //
+    // The anchor is applied BEFORE the unchanged-index bail-out. At max zoom
+    // the index cannot move, and returning early there meant pinching or
+    // double-clicking on a new star at 4x did nothing at all.
     if (anchor) {
       this.centre.x = anchor.x;
       this.centre.y = anchor.y;
+      this._clampCentre();
+      this._applyTransform();
     }
+    if (clamped === this.cropIndex) return;
     this.cropIndex = clamped;
     this._clampCentre();
     this._applyTransform();
@@ -326,11 +374,11 @@ export class LiveView {
 
   _applyTransform() {
     const s = this.scale;
-    // The <img> is width:100% of the viewport, so its layout box is the
-    // unzoomed frame. Scale about the element centre, then translate so the
-    // chosen centre point lands back in the middle of the viewport.
-    const w = this.img.clientWidth || this.viewport.clientWidth;
-    const h = this.img.clientHeight || this.viewport.clientHeight;
+    // Scale about the element centre, then translate so the chosen frame point
+    // lands back in the middle of the viewport. The displacement is measured in
+    // *rendered image* pixels, not element pixels, so a letterboxed stream pans
+    // by what the user sees rather than by the black bars.
+    const { w, h } = this._contentBox();
     const tx = -s * (this.centre.x - 0.5) * w;
     const ty = -s * (this.centre.y - 0.5) * h;
     this.img.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
@@ -353,6 +401,12 @@ export class LiveView {
   }
 
   _bindPan() {
+    // How far a pointer may travel and still count as a tap ("centre on this
+    // star") rather than a drag ("pan"). A mouse is precise; a gloved fingertip
+    // or a phone held one-handed in the cold routinely slides 8-15 px during
+    // what the user intends as a tap, and a 4 px budget swallowed those taps.
+    const slop = (event) => (event.pointerType === "mouse" ? 4 : 14);
+
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
@@ -374,10 +428,11 @@ export class LiveView {
     };
 
     const move = (event) => {
-      if (Math.hypot(event.clientX - downX, event.clientY - downY) > 4) moved = true;
+      if (Math.hypot(event.clientX - downX, event.clientY - downY) > slop(event)) {
+        moved = true;
+      }
       if (!dragging) return;
-      const w = this.img.clientWidth || 1;
-      const h = this.img.clientHeight || 1;
+      const { w, h } = this._contentBox();
       // Dragging right moves the view left across the frame, and a pixel of
       // drag covers 1/scale of a frame pixel at the current zoom.
       this.centre.x -= (event.clientX - lastX) / (w * this.scale);
@@ -423,8 +478,7 @@ export class LiveView {
           return;
         }
         if (this.scale === 1) return;              // nothing to pan when fitted
-        const w = this.img.clientWidth || 1;
-        const h = this.img.clientHeight || 1;
+        const { w, h } = this._contentBox();
         this.centre.x += event.deltaX / (w * this.scale);
         this.centre.y += event.deltaY / (h * this.scale);
         this._clampCentre();

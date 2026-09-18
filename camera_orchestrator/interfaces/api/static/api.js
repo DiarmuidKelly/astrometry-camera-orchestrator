@@ -155,8 +155,11 @@ export const startSolve = (body) => postJob("solve", body);
 
 // Kept as the fallback the socket uses while it is reconnecting, and as the
 // tested REST path. Live job state arrives on the socket, not by polling.
-export const confirmJob = (id) =>
-  request(`/api/jobs/${id}/confirm`, { method: "POST" });
+// The token scopes the answer to the prompt the user is actually looking at —
+// the server refuses a confirm that quotes a superseded one, so a stale click
+// cannot release the next phase before the lens has been capped.
+export const confirmJob = (id, token) =>
+  request(`/api/jobs/${id}/confirm`, { method: "POST", body: { token: token ?? null } });
 export const cancelJob = (id) =>
   request(`/api/jobs/${id}/cancel`, { method: "POST" });
 
@@ -305,11 +308,13 @@ class JobSocket {
     return true;
   }
 
-  /** Answer a prompt. Falls back to the POST route while reconnecting. */
-  confirm(id) {
-    return this._send({ type: "confirm", job_id: id })
+  /** Answer a prompt. Falls back to the POST route while reconnecting.
+   * `token` is the `prompt.token` of the prompt being displayed; without it the
+   * server refuses the confirm. */
+  confirm(id, token) {
+    return this._send({ type: "confirm", job_id: id, token: token ?? null })
       ? Promise.resolve(null)
-      : confirmJob(id);
+      : confirmJob(id, token);
   }
 
   /** Request cancellation. Falls back to the POST route while reconnecting. */
